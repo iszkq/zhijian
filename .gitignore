@@ -4,3 +4,7 @@ dist
 .dev.vars
 *.log
 *.tsbuildinfo
+generated/
+.tmp-word-shapes/
+scripts/__pycache__/
+*.pyc
