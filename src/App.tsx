@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowRight, BarChart3, BookCheck, Bookmark, BookmarkCheck, BrainCircuit,
   Check, ChevronDown, ChevronRight, CircleAlert, Clock3, Flame, History, Home as HomeIcon,
-  LayoutGrid, Menu, Minus, NotebookTabs, Play, Plus, RotateCcw, Sparkles, Target, Timer,
-  Trophy, X, Zap
+  Eye, EyeOff, LayoutGrid, LockKeyhole, LogIn, LogOut, Menu, Minus, NotebookTabs, Play,
+  Plus, RotateCcw, ShieldCheck, Sparkles, Target, Timer, Trophy, UserPlus, X, Zap
 } from "lucide-react";
 import { categories, getQuestions, questions } from "./data";
 import { loadAttempts, saveAttempt } from "./storage";
-import { fetchCloudAttempts, syncAttempt } from "./api";
-import type { AnswerState, Attempt, PracticeConfig, Question, ViewName } from "./types";
+import { fetchCategories, fetchCloudAttempts, fetchPracticeQuestions, getCurrentUser, login, logout, register, syncAttempt } from "./api";
+import Admin from "./Admin";
+import type { AnswerState, Attempt, AuthUser, Category, PracticeConfig, Question, ViewName } from "./types";
 
 const formatTime = (seconds: number) => {
   const safe = Math.max(0, seconds);
@@ -20,29 +21,64 @@ const formatDate = (iso: string) => new Intl.DateTimeFormat("zh-CN", {
 }).format(new Date(iso));
 
 function App() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [catalog, setCatalog] = useState<Category[]>(categories);
   const [view, setView] = useState<ViewName>("home");
   const [activeQuestions, setActiveQuestions] = useState<Question[]>([]);
   const [activeConfig, setActiveConfig] = useState<PracticeConfig | null>(null);
   const [answers, setAnswers] = useState<Record<number, AnswerState>>({});
   const [startedAt, setStartedAt] = useState(0);
   const [report, setReport] = useState<Attempt | null>(null);
-  const [attempts, setAttempts] = useState<Attempt[]>(() => loadAttempts());
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
 
   useEffect(() => {
-    fetchCloudAttempts().then((cloudItems) => {
-      if (!cloudItems.length) return;
-      cloudItems.forEach(saveAttempt);
-      setAttempts(loadAttempts());
+    getCurrentUser().then((currentUser) => {
+      setUser(currentUser);
+      setAuthReady(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setAttempts([]);
+      return;
+    }
+    fetchCategories().then(setCatalog).catch(() => setCatalog(categories));
+    setAttempts(loadAttempts(user.id));
+    fetchCloudAttempts().then((cloudItems) => {
+      cloudItems.forEach((attempt) => saveAttempt(user.id, attempt));
+      setAttempts(loadAttempts(user.id));
+    });
+  }, [user]);
+
+  const handleAuthenticated = (nextUser: AuthUser) => {
+    setUser(nextUser);
+    setView("home");
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    setUser(null);
+    setReport(null);
+    setActiveQuestions([]);
+    setView("home");
+  };
 
   const navigate = (next: ViewName) => {
     setView(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const startPractice = (config: PracticeConfig, presetQuestions?: Question[]) => {
-    const selected = presetQuestions || getQuestions(config.categoryIds, config.count);
+  const startPractice = async (config: PracticeConfig, presetQuestions?: Question[]) => {
+    let selected = presetQuestions;
+    if (!selected) {
+      try {
+        selected = await fetchPracticeQuestions(config.categoryIds, config.count);
+      } catch {
+        selected = getQuestions(config.categoryIds, config.count);
+      }
+    }
     const initial = Object.fromEntries(selected.map((item) => [item.id, { selected: null, marked: false }]));
     setActiveQuestions(selected);
     setActiveConfig({ ...config, count: selected.length });
@@ -62,9 +98,9 @@ function App() {
     const item: Attempt = {
       id: crypto.randomUUID(),
       title: activeConfig.categoryIds.length === 1
-        ? `${categories.find((c) => c.id === activeConfig.categoryIds[0])?.name}专项练习`
+        ? `${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.name}专项练习`
         : "行测综合训练",
-      categoryNames: categories.filter((c) => activeConfig.categoryIds.includes(c.id)).map((c) => c.name),
+      categoryNames: catalog.filter((c) => activeConfig.categoryIds.includes(c.id)).map((c) => c.name),
       questionIds: activeQuestions.map((q) => q.id),
       answers,
       startedAt: new Date(startedAt).toISOString(),
@@ -74,28 +110,35 @@ function App() {
       correctCount,
       wrongCount,
       unansweredCount,
-      score: Math.round((correctCount / activeQuestions.length) * 100)
+      score: Math.round((correctCount / activeQuestions.length) * 100),
+      questionSnapshots: activeQuestions
     };
-    saveAttempt(item);
+    if (!user) return;
+    saveAttempt(user.id, item);
     void syncAttempt(item);
-    setAttempts(loadAttempts());
+    setAttempts(loadAttempts(user.id));
     setReport(item);
     navigate("report");
     if (automatic) setTimeout(() => alert("本组练习时间已到，系统已自动交卷。"), 200);
   };
 
   const retakeWrong = () => {
-    const wrongIds = new Set(attempts.flatMap((a) => a.questionIds.filter((id) => a.answers[id]?.selected && a.answers[id]?.selected !== questions.find((q) => q.id === id)?.answer)));
-    const wrongQuestions = questions.filter((q) => wrongIds.has(q.id));
+    const bank = [...attempts.flatMap((attempt) => attempt.questionSnapshots || []), ...questions];
+    const findQuestion = (id: number) => bank.find((question) => question.id === id);
+    const wrongIds = new Set(attempts.flatMap((a) => a.questionIds.filter((id) => a.answers[id]?.selected && a.answers[id]?.selected !== findQuestion(id)?.answer)));
+    const wrongQuestions = [...new Map(bank.filter((question) => wrongIds.has(question.id)).map((question) => [question.id, question])).values()];
     if (!wrongQuestions.length) return;
     startPractice({ categoryIds: [...new Set(wrongQuestions.map((q) => q.categoryId))], count: wrongQuestions.length, durationMinutes: null }, wrongQuestions);
   };
 
+  if (!authReady) return <div className="auth-loading"><span className="brand-mark"><BrainCircuit size={25} /></span><b>知简</b></div>;
+  if (!user) return <AuthPage onAuthenticated={handleAuthenticated} />;
+
   return (
     <div className="app-shell">
-      {view !== "practice" && <SiteHeader view={view} navigate={navigate} />}
+      {view !== "practice" && <SiteHeader view={view} navigate={navigate} user={user} onLogout={handleLogout} />}
       <main>
-        {view === "home" && <Home attempts={attempts} startPractice={startPractice} navigate={navigate} />}
+        {view === "home" && <Home attempts={attempts} categoriesList={catalog} startPractice={startPractice} navigate={navigate} />}
         {view === "practice" && activeConfig && (
           <Practice
             items={activeQuestions}
@@ -105,22 +148,79 @@ function App() {
             startedAt={startedAt}
             onBack={() => navigate("home")}
             onSubmit={submitPractice}
+            categoriesList={catalog}
           />
         )}
         {view === "report" && report && <Report attempt={report} navigate={navigate} onRetry={() => startPractice(activeConfig!, activeQuestions)} />}
         {view === "history" && <HistoryView attempts={attempts} setReport={setReport} navigate={navigate} />}
         {view === "wrongbook" && <WrongBook attempts={attempts} onPractice={retakeWrong} navigate={navigate} />}
+        {view === "admin" && user.role === "admin" && <Admin onCatalogChanged={() => fetchCategories().then(setCatalog)} />}
       </main>
     </div>
   );
 }
 
-function SiteHeader({ view, navigate }: { view: ViewName; navigate: (v: ViewName) => void }) {
+function AuthPage({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const switchMode = (next: "login" | "register") => {
+    setMode(next);
+    setError("");
+  };
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+    const result = mode === "login"
+      ? await login(username.trim(), password)
+      : await register(username.trim(), displayName.trim(), password);
+    setSubmitting(false);
+    if (result.error) setError(result.error);
+    else if (result.user) onAuthenticated(result.user);
+  };
+
+  return <div className="auth-page">
+    <div className="auth-ambient auth-ambient-one" /><div className="auth-ambient auth-ambient-two" />
+    <section className="auth-intro">
+      <div className="auth-brand"><span className="brand-mark"><BrainCircuit size={25} /></span><b>知简</b></div>
+      <span className="auth-kicker">知于简，行于远</span>
+      <h1>把每一次练习，<br />都沉淀成自己的进步。</h1>
+      <p>专注公考行测训练，记录成绩、错题与每一步成长。</p>
+      <div className="auth-points">
+        <span><ShieldCheck />账号数据独立保存</span>
+        <span><Target />专项练习精准复盘</span>
+        <span><BookCheck />错题解析随时回看</span>
+      </div>
+    </section>
+    <section className="auth-card">
+      <div className="auth-card-heading"><span>{mode === "login" ? <LogIn /> : <UserPlus />}</span><div><h2>{mode === "login" ? "欢迎回来" : "创建账号"}</h2><p>{mode === "login" ? "登录后继续你的学习进度" : "一个账号，保存你的专属学习记录"}</p></div></div>
+      <div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>登录</button><button type="button" className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>注册</button></div>
+      <form onSubmit={submit}>
+        {mode === "register" && <label><span>昵称</span><div className="auth-field"><UserPlus size={18} /><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：清风" maxLength={20} autoComplete="nickname" required /></div></label>}
+        <label><span>账号</span><div className="auth-field"><LogIn size={18} /><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="3-24位字母、数字或下划线" maxLength={24} autoComplete="username" required /></div></label>
+        <label><span>密码</span><div className="auth-field"><LockKeyhole size={18} /><input type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "register" ? "至少8位密码" : "请输入密码"} minLength={mode === "register" ? 8 : 1} maxLength={72} autoComplete={mode === "login" ? "current-password" : "new-password"} required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></div></label>
+        {error && <div className="auth-error"><CircleAlert size={16} />{error}</div>}
+        <button className="auth-submit" disabled={submitting}>{submitting ? "请稍候…" : mode === "login" ? "登录知简" : "注册并开始刷题"}<ArrowRight size={18} /></button>
+      </form>
+      <p className="auth-switch">{mode === "login" ? "还没有账号？" : "已有账号？"}<button onClick={() => switchMode(mode === "login" ? "register" : "login")}>{mode === "login" ? "立即注册" : "返回登录"}</button></p>
+    </section>
+  </div>;
+}
+
+function SiteHeader({ view, navigate, user, onLogout }: { view: ViewName; navigate: (v: ViewName) => void; user: AuthUser; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   const links: { id: ViewName; label: string; icon: typeof HomeIcon }[] = [
     { id: "home", label: "刷题首页", icon: HomeIcon },
     { id: "history", label: "练习记录", icon: History },
-    { id: "wrongbook", label: "错题本", icon: NotebookTabs }
+    { id: "wrongbook", label: "错题本", icon: NotebookTabs },
+    ...(user.role === "admin" ? [{ id: "admin" as ViewName, label: "管理后台", icon: ShieldCheck }] : [])
   ];
   return (
     <header className="site-header">
@@ -138,7 +238,8 @@ function SiteHeader({ view, navigate }: { view: ViewName; navigate: (v: ViewName
         </nav>
         <div className="header-actions">
           <span className="streak"><Flame size={17} /> 今日已坚持</span>
-          <span className="avatar">行</span>
+          <div className="account-chip"><span className="avatar">{user.displayName.slice(0, 1)}</span><span><b>{user.displayName}</b><small>@{user.username}</small></span></div>
+          <button className="logout-button" onClick={onLogout} title="退出登录"><LogOut size={18} /></button>
           <button className="icon-button mobile-menu" onClick={() => setOpen((v) => !v)} aria-label="打开菜单"><Menu size={21} /></button>
         </div>
       </div>
@@ -146,18 +247,23 @@ function SiteHeader({ view, navigate }: { view: ViewName; navigate: (v: ViewName
   );
 }
 
-function Home({ attempts, startPractice, navigate }: {
+function Home({ attempts, categoriesList, startPractice, navigate }: {
   attempts: Attempt[];
+  categoriesList: Category[];
   startPractice: (c: PracticeConfig) => void;
   navigate: (v: ViewName) => void;
 }) {
-  const [selected, setSelected] = useState<number[]>(categories.map((c) => c.id));
+  const [selected, setSelected] = useState<number[]>(categoriesList.map((c) => c.id));
   const [count, setCount] = useState(10);
   const [duration, setDuration] = useState<number | null>(null);
-  const totalAvailable = categories.filter((c) => selected.includes(c.id)).reduce((sum, c) => sum + c.questionCount, 0);
+  const totalAvailable = categoriesList.filter((c) => selected.includes(c.id)).reduce((sum, c) => sum + c.questionCount, 0);
   const totalAnswered = attempts.reduce((sum, a) => sum + a.questionIds.length, 0);
   const totalCorrect = attempts.reduce((sum, a) => sum + a.correctCount, 0);
   const accuracy = totalAnswered ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
+
+  useEffect(() => {
+    setCount((current) => Math.min(Math.max(1, current), Math.max(1, totalAvailable)));
+  }, [totalAvailable]);
 
   const toggleCategory = (id: number) => {
     setSelected((prev) => prev.includes(id) ? (prev.length === 1 ? prev : prev.filter((item) => item !== id)) : [...prev, id]);
@@ -193,9 +299,9 @@ function Home({ attempts, startPractice, navigate }: {
         </div>
 
         <div className="builder-block">
-          <div className="builder-label"><span>1</span><div><b>选择题型</b><small>可多选</small></div><button onClick={() => setSelected(categories.map((c) => c.id))}>全选</button></div>
+          <div className="builder-label"><span>1</span><div><b>选择题型</b><small>可多选</small></div><button onClick={() => setSelected(categoriesList.map((c) => c.id))}>全选</button></div>
           <div className="category-picker">
-            {categories.map((category) => {
+            {categoriesList.map((category) => {
               const active = selected.includes(category.id);
               return (
                 <button key={category.id} className={active ? "category-choice active" : "category-choice"} onClick={() => toggleCategory(category.id)} style={{ "--cat": category.color, "--soft": category.softColor } as React.CSSProperties}>
@@ -212,17 +318,16 @@ function Home({ attempts, startPractice, navigate }: {
           <div className="builder-block compact">
             <div className="builder-label"><span>2</span><div><b>题目数量</b><small>本组练习题数</small></div></div>
             <div className="count-control">
-              <button onClick={() => setCount(Math.max(1, count - 5))}><Minus size={18} /></button>
-              <div><strong>{Math.min(count, totalAvailable)}</strong><span>题</span></div>
-              <button onClick={() => setCount(Math.min(totalAvailable, count + 5))}><Plus size={18} /></button>
+              <button onClick={() => setCount(Math.max(1, count - 1))} aria-label="减少题数"><Minus size={18} /></button>
+              <div><input type="number" min={1} max={totalAvailable} step={1} value={Math.min(count, totalAvailable)} onChange={(event) => setCount(Math.min(totalAvailable, Math.max(1, Number(event.target.value) || 1)))} aria-label="自定义题目数量" /><span>题</span></div>
+              <button onClick={() => setCount(Math.min(totalAvailable, count + 1))} aria-label="增加题数"><Plus size={18} /></button>
             </div>
             <div className="quick-values">{[5, 10, 15, 20].filter((v) => v <= totalAvailable).map((v) => <button key={v} className={count === v ? "active" : ""} onClick={() => setCount(v)}>{v}题</button>)}</div>
           </div>
           <div className="builder-block compact">
-            <div className="builder-label"><span>3</span><div><b>限时设置</b><small>到时自动交卷</small></div></div>
-            <div className="time-values">
-              {[null, 10, 20, 30, 60].map((v) => <button key={v ?? "none"} className={duration === v ? "active" : ""} onClick={() => setDuration(v)}>{v ? `${v}分钟` : "不限时"}</button>)}
-            </div>
+            <div className="builder-label"><span>3</span><div><b>限时设置</b><small>0分钟表示不限时</small></div></div>
+            <div className="time-input"><Timer size={18} /><input type="number" min={0} step={1} value={duration ?? 0} onChange={(event) => { const value = Math.max(0, Math.floor(Number(event.target.value) || 0)); setDuration(value === 0 ? null : value); }} aria-label="自定义限时分钟数" /><span>分钟</span><small>{duration ? "到时自动交卷" : "不限时"}</small></div>
+            <div className="time-values">{[0, 10, 20, 30, 60].map((value) => <button key={value} className={(duration ?? 0) === value ? "active" : ""} onClick={() => setDuration(value === 0 ? null : value)}>{value ? `${value}分钟` : "不限时"}</button>)}</div>
           </div>
         </div>
 
@@ -238,7 +343,7 @@ function Home({ attempts, startPractice, navigate }: {
         <div className="category-section">
           <div className="mini-heading"><div><LayoutGrid size={19} /><h2>专项题库</h2></div><span>针对薄弱项逐个击破</span></div>
           <div className="category-cards">
-            {categories.map((category) => (
+            {categoriesList.map((category) => (
               <button key={category.id} className="category-card" style={{ "--cat": category.color, "--soft": category.softColor } as React.CSSProperties} onClick={() => startPractice({ categoryIds: [category.id], count: 5, durationMinutes: null })}>
                 <span className="category-glyph">{category.shortName.slice(0, 1)}</span>
                 <span><b>{category.name}</b><small>{category.description}</small></span>
@@ -262,7 +367,7 @@ function Home({ attempts, startPractice, navigate }: {
   );
 }
 
-function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSubmit }: {
+function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSubmit, categoriesList }: {
   items: Question[];
   config: PracticeConfig;
   answers: Record<number, AnswerState>;
@@ -270,6 +375,7 @@ function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSub
   startedAt: number;
   onBack: () => void;
   onSubmit: (automatic?: boolean) => void;
+  categoriesList: Category[];
 }) {
   const [elapsed, setElapsed] = useState(Math.round((Date.now() - startedAt) / 1000));
   const [current, setCurrent] = useState(0);
@@ -302,7 +408,7 @@ function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSub
       <header className="exam-header">
         <div className="exam-header-inner">
           <button className="back-button" onClick={() => { if (confirm("退出后，本次答题进度不会保留，确定退出吗？")) onBack(); }}><ArrowLeft size={19} />退出练习</button>
-          <div className="exam-title"><span>行测练习</span><i />{config.categoryIds.length === 1 ? categories.find((c) => c.id === config.categoryIds[0])?.name : "综合训练"}</div>
+          <div className="exam-title"><span>行测练习</span><i />{config.categoryIds.length === 1 ? categoriesList.find((c) => c.id === config.categoryIds[0])?.name : "综合训练"}</div>
           <div className={remaining !== null && remaining < 60 ? "exam-timer danger" : "exam-timer"}><Timer size={19} /><span>{remaining === null ? formatTime(elapsed) : formatTime(remaining)}</span><small>{remaining === null ? "已用时" : "剩余"}</small></div>
         </div>
         <div className="top-progress"><span style={{ width: `${(answeredCount / items.length) * 100}%` }} /></div>
@@ -315,6 +421,7 @@ function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSub
                 <div><span className="question-no">{index + 1}<small>/{items.length}</small></span><span className="type-tag">{item.type}</span><span className="point-tag">1分</span></div>
                 <button className={answers[item.id]?.marked ? "mark-button active" : "mark-button"} onClick={() => mark(item.id)}>{answers[item.id]?.marked ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}<span>{answers[item.id]?.marked ? "已标记" : "标记"}</span></button>
               </div>
+              {item.imageUrl && <img className="question-image" src={item.imageUrl} alt="题目材料" />}
               <p className="question-stem">{item.stem}</p>
               <div className="option-grid">
                 {item.options.map((option) => (
@@ -350,7 +457,8 @@ function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSub
 function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v: ViewName) => void; onRetry: () => void }) {
   const [filter, setFilter] = useState<"all" | "wrong" | "correct">("all");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const items = attempt.questionIds.map((id) => questions.find((q) => q.id === id)!).filter(Boolean);
+  const reportBank = attempt.questionSnapshots?.length ? attempt.questionSnapshots : questions;
+  const items = attempt.questionIds.map((id) => reportBank.find((q) => q.id === id)!).filter(Boolean);
   const filtered = items.filter((item) => {
     const selected = attempt.answers[item.id]?.selected;
     if (filter === "correct") return selected === item.answer;
@@ -386,6 +494,7 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
             const correct = selected === item.answer;
             return <article className={`review-card ${correct ? "correct" : "wrong"}`} key={item.id}>
               <div className="review-meta"><div><span className="result-stamp">{correct ? <Check size={18} /> : <X size={18} />}{correct ? "正确" : selected ? "错误" : "未答"}</span><span>{index + 1}/{items.length}</span><span>{item.type}</span><span>{item.categoryName}</span></div><b>{correct ? "+1分" : "0分"}</b></div>
+              {item.imageUrl && <img className="question-image review-image" src={item.imageUrl} alt="题目材料" />}
               <p className="review-stem">{item.stem}</p>
               <div className="review-options">{item.options.map((option) => {
                 const isAnswer = option.label === item.answer;
@@ -418,23 +527,44 @@ function HistoryView({ attempts, setReport, navigate }: { attempts: Attempt[]; s
 }
 
 function WrongBook({ attempts, onPractice, navigate }: { attempts: Attempt[]; onPractice: () => void; navigate: (v: ViewName) => void }) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const questionBank = useMemo(() => [...attempts.flatMap((attempt) => attempt.questionSnapshots || []), ...questions], [attempts]);
   const wrongMap = useMemo(() => {
-    const map = new Map<number, { count: number; lastAt: string }>();
+    const map = new Map<number, { count: number; lastAt: string; selected: string }>();
     attempts.forEach((a) => a.questionIds.forEach((id) => {
       const selected = a.answers[id]?.selected;
-      const answer = questions.find((q) => q.id === id)?.answer;
+      const answer = questionBank.find((q) => q.id === id)?.answer;
       if (selected && selected !== answer) {
         const old = map.get(id);
-        map.set(id, { count: (old?.count || 0) + 1, lastAt: old?.lastAt || a.submittedAt });
+        map.set(id, { count: (old?.count || 0) + 1, lastAt: old?.lastAt || a.submittedAt, selected: old?.selected || selected });
       }
     }));
     return map;
-  }, [attempts]);
-  const wrongItems = [...wrongMap.entries()].map(([id, meta]) => ({ question: questions.find((q) => q.id === id)!, ...meta })).filter((x) => x.question);
+  }, [attempts, questionBank]);
+  const wrongItems = [...wrongMap.entries()].map(([id, meta]) => ({ question: questionBank.find((q) => q.id === id)!, ...meta })).filter((x) => x.question);
+  const toggleDetail = (id: number) => setExpanded((previous) => {
+    const next = new Set(previous);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
   return <div className="records-page page-width">
     <div className="wrong-title-row"><PageTitle icon={NotebookTabs} title="错题本" subtitle="定期回看错题，把不会的真正变成会的" />{wrongItems.length > 0 && <button className="primary-button" onClick={onPractice}><Play size={17} />错题重练</button>}</div>
     <div className="wrong-summary"><div><span className="warm-icon"><Flame /></span><div><strong>{wrongItems.length}</strong><p>待巩固错题</p></div></div><p>错题不是失败，而是系统帮你标出的提分重点。建议完成解析复盘后，间隔练习直到稳定答对。</p></div>
-    {wrongItems.length ? <div className="wrong-list">{wrongItems.map(({ question, count, lastAt }, index) => <article className="wrong-row" key={question.id}><span className="wrong-index">{String(index + 1).padStart(2, "0")}</span><div><div className="wrong-meta"><span>{question.categoryName}</span><span>{question.difficulty}</span><em>累计错 {count} 次</em></div><p>{question.stem}</p><small>最近错题：{formatDate(lastAt)}</small></div><span className="answer-chip">答案 {question.answer}</span></article>)}</div> : <EmptyState icon={NotebookTabs} title="错题本还是空的" text="答错的题目会自动收录到这里，方便你集中复习" action="去做一组题" onClick={() => navigate("home")} />}
+    {wrongItems.length ? <div className="wrong-list">{wrongItems.map(({ question, count, lastAt, selected }, index) => {
+      const isOpen = expanded.has(question.id);
+      return <article className={isOpen ? "wrong-row open" : "wrong-row"} key={question.id}>
+        <button className="wrong-row-main" onClick={() => toggleDetail(question.id)}>
+          <span className="wrong-index">{String(index + 1).padStart(2, "0")}</span>
+          <span className="wrong-question-copy"><span className="wrong-meta"><span>{question.categoryName}</span><span>{question.difficulty}</span><em>累计错 {count} 次</em></span><strong>{question.stem}</strong><small>最近错题：{formatDate(lastAt)}</small></span>
+          <span className="wrong-row-action"><span className="answer-chip">答案 {question.answer}</span><span className="detail-label">{isOpen ? "收起" : "查看详情"}<ChevronDown size={17} /></span></span>
+        </button>
+        {isOpen && <div className="wrong-detail">
+          {question.imageUrl && <img className="question-image wrong-detail-image" src={question.imageUrl} alt="题目材料" />}
+          <div className="wrong-detail-options">{question.options.map((option) => <div key={option.label} className={`${option.label === question.answer ? "correct" : ""} ${option.label === selected ? "selected" : ""}`}><span>{option.label}</span><b>{option.content}</b>{option.label === question.answer && <em><Check size={15} />正确答案</em>}{option.label === selected && option.label !== question.answer && <em><X size={15} />你的答案</em>}</div>)}</div>
+          <div className="wrong-analysis"><div><BookCheck size={19} /><b>题目解析</b><span>难度：{question.difficulty}</span><span>来源：{question.source}</span></div><p>{question.explanation}</p></div>
+        </div>}
+      </article>;
+    })}</div> : <EmptyState icon={NotebookTabs} title="错题本还是空的" text="答错的题目会自动收录到这里，方便你集中复习" action="去做一组题" onClick={() => navigate("home")} />}
   </div>;
 }
 

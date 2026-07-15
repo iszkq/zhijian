@@ -16,5 +16,11 @@
       "database_id": "9e76d14e-ea9c-4471-9ae4-5541d96f94e7",
       "migrations_dir": "migrations"
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "zhijian-media"
+    }
   ]
 }

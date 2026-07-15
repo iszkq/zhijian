@@ -1,4 +1,4 @@
-export type CategorySlug = "politics" | "knowledge" | "language" | "math" | "data";
+export type CategorySlug = string;
 
 export interface Category {
   id: number;
@@ -27,6 +27,8 @@ export interface Question {
   explanation: string;
   source: string;
   difficulty: "基础" | "进阶" | "挑战";
+  imageUrl?: string | null;
+  status?: "published" | "draft";
 }
 
 export interface PracticeConfig {
@@ -54,6 +56,16 @@ export interface Attempt {
   wrongCount: number;
   unansweredCount: number;
   score: number;
+  questionSnapshots?: Question[];
 }
 
-export type ViewName = "home" | "practice" | "report" | "history" | "wrongbook";
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  createdAt: string;
+  role: "user" | "admin";
+  status: "active" | "disabled";
+}
+
+export type ViewName = "home" | "practice" | "report" | "history" | "wrongbook" | "admin";
