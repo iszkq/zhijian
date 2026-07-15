@@ -23,6 +23,18 @@ export async function fetchPracticeQuestions(categoryIds: number[], count: numbe
   return payload.data;
 }
 
+export async function fetchQuestionsByIds(ids: number[]): Promise<Question[]> {
+  const unique = [...new Set(ids)];
+  const questions: Question[] = [];
+  for (let start = 0; start < unique.length; start += 100) {
+    const batch = unique.slice(start, start + 100);
+    const params = new URLSearchParams({ ids: batch.join(",") });
+    const payload = await request<{ data: Question[] }>(`/api/questions/by-ids?${params}`);
+    questions.push(...payload.data);
+  }
+  return questions;
+}
+
 export async function uploadQuestionImage(file: File): Promise<{ key: string; url: string }> {
   const form = new FormData();
   form.append("file", file);

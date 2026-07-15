@@ -55,6 +55,21 @@ function cleanQuestionType(value: unknown) {
   ];
   return known.find(([prefix]) => text.includes(prefix))?.[1] || text || "片段阅读";
 }
+
+function publicQuestion(row: Record<string, unknown>) {
+  const details = parseQuestionDetails(row.detailsJson);
+  return {
+    ...row,
+    type: cleanQuestionType(row.type),
+    options: JSON.parse(String(row.optionsJson)),
+    stemRich: details?.stemRich,
+    details,
+    imageUrl: row.imageKey ? `/api/media/${row.imageKey}` : null,
+    optionsJson: undefined,
+    imageKey: undefined,
+    detailsJson: undefined
+  };
+}
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
 const bytesToBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
@@ -309,20 +324,22 @@ app.get("/api/questions", async (c) => {
     ORDER BY RANDOM() LIMIT ?
   `).bind(...ids, ...types, count);
   const { results } = await statement.all<Record<string, unknown>>();
-  return c.json({ data: results.map((row) => {
-    const details = parseQuestionDetails(row.detailsJson);
-    return {
-      ...row,
-      type: cleanQuestionType(row.type),
-      options: JSON.parse(String(row.optionsJson)),
-      stemRich: details?.stemRich,
-      details,
-      imageUrl: row.imageKey ? `/api/media/${row.imageKey}` : null,
-      optionsJson: undefined,
-      imageKey: undefined,
-      detailsJson: undefined
-    };
-  }) });
+  return c.json({ data: results.map(publicQuestion) });
+});
+
+app.get("/api/questions/by-ids", async (c) => {
+  const ids = [...new Set((c.req.query("ids") || "").split(",").map(Number).filter(Boolean))].slice(0, 100);
+  if (!ids.length) return c.json({ data: [] });
+  const placeholders = ids.map(() => "?").join(",");
+  const { results } = await c.env.DB.prepare(`
+    SELECT q.id, q.category_id AS categoryId, c.name AS categoryName, q.type, q.stem,
+           q.options_json AS optionsJson, q.answer, q.explanation, q.source, q.difficulty,
+           q.image_key AS imageKey, q.status, q.details_json AS detailsJson
+    FROM questions q JOIN categories c ON c.id = q.category_id
+    WHERE q.status = 'published' AND q.id IN (${placeholders})
+  `).bind(...ids).all<Record<string, unknown>>();
+  const byId = new Map(results.map((row) => [Number(row.id), publicQuestion(row)]));
+  return c.json({ data: ids.flatMap((id) => byId.has(id) ? [byId.get(id)] : []) });
 });
 
 app.get("/api/media/:key", async (c) => {

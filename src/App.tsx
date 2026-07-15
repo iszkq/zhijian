@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { categories, getQuestions, questions } from "./data";
 import { loadAttempts, saveAttempt } from "./storage";
-import { fetchCategories, fetchCloudAttempts, fetchPracticeQuestions, getCurrentUser, login, logout, register, syncAttempt } from "./api";
+import { fetchCategories, fetchCloudAttempts, fetchPracticeQuestions, fetchQuestionsByIds, getCurrentUser, login, logout, register, syncAttempt } from "./api";
 import Admin from "./Admin";
 import type { AnswerState, Attempt, AuthUser, Category, PracticeConfig, Question, RichTextSegment, ViewName } from "./types";
 
@@ -20,6 +20,13 @@ const formatTime = (seconds: number) => {
 const formatDate = (iso: string) => new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false
 }).format(new Date(iso));
+
+function refreshAttemptSnapshots(attempt: Attempt, latest: Question[]) {
+  const old = new Map((attempt.questionSnapshots || []).map((question) => [question.id, question]));
+  const current = new Map(latest.map((question) => [question.id, question]));
+  const snapshots = attempt.questionIds.flatMap((id) => current.has(id) ? [current.get(id)!] : old.has(id) ? [old.get(id)!] : []);
+  return snapshots.length ? { ...attempt, questionSnapshots: snapshots } : attempt;
+}
 
 function RichText({ segments, className = "" }: { segments: RichTextSegment[]; className?: string }) {
   return <span className={`rich-text ${className}`}>{segments.map((segment, index) => {
@@ -78,9 +85,15 @@ function App() {
     }
     fetchCategories().then(setCatalog).catch(() => setCatalog(categories));
     setAttempts(loadAttempts(user.id));
-    fetchCloudAttempts().then((cloudItems) => {
+    fetchCloudAttempts().then(async (cloudItems) => {
       cloudItems.forEach((attempt) => saveAttempt(user.id, attempt));
-      setAttempts(loadAttempts(user.id));
+      const merged = loadAttempts(user.id);
+      try {
+        const latest = await fetchQuestionsByIds(merged.flatMap((attempt) => attempt.questionIds));
+        setAttempts(merged.map((attempt) => refreshAttemptSnapshots(attempt, latest)));
+      } catch {
+        setAttempts(merged);
+      }
     });
   }, [user]);
 
@@ -154,6 +167,20 @@ function App() {
     if (automatic) setTimeout(() => alert("本组练习时间已到，系统已自动交卷。"), 200);
   };
 
+  const openAttemptReport = async (attempt: Attempt) => {
+    let refreshed = attempt;
+    try {
+      refreshed = refreshAttemptSnapshots(attempt, await fetchQuestionsByIds(attempt.questionIds));
+    } catch {
+      // The saved snapshot remains available when the network is interrupted.
+    }
+    const snapshots = refreshed.questionSnapshots || [];
+    setReport(refreshed);
+    setActiveQuestions(snapshots);
+    setActiveConfig({ categoryIds: [...new Set(snapshots.map((question) => question.categoryId))], count: snapshots.length, durationMinutes: null });
+    navigate("report");
+  };
+
   const retakeWrong = () => {
     const bank = [...attempts.flatMap((attempt) => attempt.questionSnapshots || []), ...questions];
     const findQuestion = (id: number) => bank.find((question) => question.id === id);
@@ -184,7 +211,7 @@ function App() {
           />
         )}
         {view === "report" && report && <Report attempt={report} navigate={navigate} onRetry={() => startPractice(activeConfig!, activeQuestions)} />}
-        {view === "history" && <HistoryView attempts={attempts} setReport={setReport} navigate={navigate} />}
+        {view === "history" && <HistoryView attempts={attempts} openReport={openAttemptReport} navigate={navigate} />}
         {view === "wrongbook" && <WrongBook attempts={attempts} onPractice={retakeWrong} navigate={navigate} />}
         {view === "admin" && user.role === "admin" && <Admin onCatalogChanged={() => fetchCategories().then(setCatalog)} />}
       </main>
@@ -563,13 +590,13 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
   );
 }
 
-function HistoryView({ attempts, setReport, navigate }: { attempts: Attempt[]; setReport: (a: Attempt) => void; navigate: (v: ViewName) => void }) {
+function HistoryView({ attempts, openReport, navigate }: { attempts: Attempt[]; openReport: (a: Attempt) => Promise<void>; navigate: (v: ViewName) => void }) {
   const total = attempts.reduce((s, a) => s + a.questionIds.length, 0);
   const accuracy = total ? Math.round(attempts.reduce((s, a) => s + a.correctCount, 0) / total * 100) : 0;
   return <div className="records-page page-width">
     <PageTitle icon={History} title="练习记录" subtitle="每一次认真作答，都在积累上岸的底气" />
     <div className="record-stats"><div><BookCheck /><span><strong>{attempts.length}</strong>完成练习</span></div><div><Target /><span><strong>{total}</strong>累计答题</span></div><div><BarChart3 /><span><strong>{accuracy || "—"}{accuracy ? "%" : ""}</strong>综合正确率</span></div></div>
-    {attempts.length ? <div className="record-list">{attempts.map((a) => <button className="record-row" key={a.id} onClick={() => { setReport(a); navigate("report"); }}><span className={`record-score ${a.score >= 80 ? "great" : a.score >= 60 ? "good" : ""}`}><strong>{a.score}</strong>分</span><span className="record-info"><b>{a.title}</b><small>{a.categoryNames.join(" · ")}</small></span><span className="record-data"><b>{a.correctCount}/{a.questionIds.length}</b><small>答对题数</small></span><span className="record-data"><b>{formatTime(a.durationSeconds)}</b><small>答题用时</small></span><span className="record-date">{formatDate(a.submittedAt)}</span><ChevronRight /></button>)}</div> : <EmptyState icon={History} title="还没有练习记录" text="选一组题开始练习，你的成绩变化会保存在这里" action="开始刷题" onClick={() => navigate("home")} />}
+    {attempts.length ? <div className="record-list">{attempts.map((a) => <button className="record-row" key={a.id} onClick={() => void openReport(a)}><span className={`record-score ${a.score >= 80 ? "great" : a.score >= 60 ? "good" : ""}`}><strong>{a.score}</strong>分</span><span className="record-info"><b>{a.title}</b><small>{a.categoryNames.join(" · ")}</small></span><span className="record-data"><b>{a.correctCount}/{a.questionIds.length}</b><small>答对题数</small></span><span className="record-data"><b>{formatTime(a.durationSeconds)}</b><small>答题用时</small></span><span className="record-date">{formatDate(a.submittedAt)}</span><ChevronRight /></button>)}</div> : <EmptyState icon={History} title="还没有练习记录" text="选一组题开始练习，你的成绩变化会保存在这里" action="开始刷题" onClick={() => navigate("home")} />}
   </div>;
 }
 
