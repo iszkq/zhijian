@@ -244,7 +244,7 @@ button:focus-visible { outline: 3px solid rgba(92,92,246,.2); outline-offset: 2p
 .rich-text { white-space: pre-wrap; }
 .rich-bold { font-weight: 700; }
 .rich-underline { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.rich-blank { display: inline-block; width: max(2em, calc(var(--blank-chars, 10) * 1ch)); height: 1em; border-bottom: 1px solid currentColor; vertical-align: baseline; }
+.rich-blank { display: inline-block; width: max(2em, calc(var(--blank-chars, 10) * 1ch)); height: 1em; border-bottom: 1px solid currentColor; text-decoration: none !important; vertical-align: baseline; }
 .rich-italic { font-style: italic; }
 .option-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
 .option { min-height: 57px; padding: 10px 14px; display: flex; align-items: center; gap: 12px; text-align: left; color: #57596b; background: white; border: 1.5px solid #e0e1e9; border-radius: 11px; transition: .15s; }
