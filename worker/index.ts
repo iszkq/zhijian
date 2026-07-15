@@ -97,6 +97,43 @@ async function createSession(c: AppContext, userId: string) {
 
 app.get("/api/health", (c) => c.json({ ok: true, service: "知简 API" }));
 
+app.get("/api/health/ready", async (c) => {
+  const readiness = {
+    database: false,
+    usersTable: false,
+    sessionsTable: false,
+    roleColumn: false,
+    statusColumn: false,
+    imageColumn: false,
+    passwordCrypto: false
+  };
+  try {
+    const row = await c.env.DB.prepare(`
+      SELECT
+        EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'users') AS users_table,
+        EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'user_sessions') AS sessions_table,
+        EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name = 'role') AS role_column,
+        EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name = 'status') AS status_column,
+        EXISTS(SELECT 1 FROM pragma_table_info('questions') WHERE name = 'image_key') AS image_column
+    `).first<Record<string, number>>();
+    readiness.database = true;
+    readiness.usersTable = Boolean(row?.users_table);
+    readiness.sessionsTable = Boolean(row?.sessions_table);
+    readiness.roleColumn = Boolean(row?.role_column);
+    readiness.statusColumn = Boolean(row?.status_column);
+    readiness.imageColumn = Boolean(row?.image_column);
+  } catch (error) {
+    console.error("readiness database check failed", error);
+  }
+  try {
+    readiness.passwordCrypto = (await hashPassword("readiness-check", new Uint8Array(16))).length > 0;
+  } catch (error) {
+    console.error("readiness crypto check failed", error);
+  }
+  const ready = Object.values(readiness).every(Boolean);
+  return c.json({ ok: ready, checks: readiness }, ready ? 200 : 503);
+});
+
 app.use("/api/admin/*", async (c, next) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "请先登录" }, 401);
@@ -116,20 +153,42 @@ app.post("/api/auth/register", zValidator("json", registerSchema, (result, c) =>
 }), async (c) => {
   const data = c.req.valid("json");
   const username = data.username.toLowerCase();
-  const existing = await c.env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(username).first();
+  let existing: Record<string, unknown> | null;
+  try {
+    existing = await c.env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(username).first();
+  } catch (error) {
+    console.error("register schema check failed", error);
+    return c.json({ error: "账号数据库尚未正确初始化", code: "AUTH_DB_NOT_READY" }, 503);
+  }
   if (existing) return c.json({ error: "这个账号已经被使用" }, 409);
 
   const salt = new Uint8Array(16);
   crypto.getRandomValues(salt);
   const userId = crypto.randomUUID();
-  const passwordHash = await hashPassword(data.password, salt);
-  await c.env.DB.prepare(`
-    INSERT INTO users (id, username, display_name, password_hash, password_salt)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(userId, username, data.displayName, passwordHash, bytesToBase64(salt)).run();
-  await createSession(c, userId);
-  const user = await c.env.DB.prepare("SELECT id, username, display_name, created_at, role, status FROM users WHERE id = ?").bind(userId).first<SessionUserRow>();
-  return c.json({ user: publicUser(user!) }, 201);
+  let passwordHash: string;
+  try {
+    passwordHash = await hashPassword(data.password, salt);
+  } catch (error) {
+    console.error("register password hashing failed", error);
+    return c.json({ error: "密码安全加密失败，请稍后重试", code: "AUTH_CRYPTO_FAILED" }, 500);
+  }
+  try {
+    await c.env.DB.prepare(`
+      INSERT INTO users (id, username, display_name, password_hash, password_salt)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(userId, username, data.displayName, passwordHash, bytesToBase64(salt)).run();
+  } catch (error) {
+    console.error("register user insert failed", error);
+    return c.json({ error: "账号写入失败，请检查数据库配置", code: "AUTH_USER_WRITE_FAILED" }, 500);
+  }
+  try {
+    await createSession(c, userId);
+  } catch (error) {
+    console.error("register session creation failed", error);
+    await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run().catch(() => undefined);
+    return c.json({ error: "登录会话创建失败，请稍后重试", code: "AUTH_SESSION_FAILED" }, 500);
+  }
+  return c.json({ user: { id: userId, username, displayName: data.displayName, createdAt: new Date().toISOString(), role: "user", status: "active" } }, 201);
 });
 
 const loginSchema = z.object({
