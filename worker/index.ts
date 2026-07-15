@@ -47,7 +47,13 @@ function parseQuestionDetails(value: unknown) {
   }
 }
 function cleanQuestionType(value: unknown) {
-  return String(value || "片段阅读").replace(/[①-㊿0-9]+$/g, "").trim() || "片段阅读";
+  const text = String(value || "片段阅读").replace(/[①-㊿0-9]+$/g, "").trim();
+  const known: Array<[string, string]> = [
+    ["中心理解", "中心理解题"], ["语句填入", "语句填入类"], ["语句排序", "语句排序类"],
+    ["下文推断", "下文推断类"], ["细节判断", "细节判断类"], ["标题", "标题拟定类"],
+    ["词句理解", "词句理解题"], ["观点态度", "观点态度题"], ["上文推断", "上文推断类"]
+  ];
+  return known.find(([prefix]) => text.includes(prefix))?.[1] || text || "片段阅读";
 }
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
@@ -270,14 +276,21 @@ app.get("/api/categories", async (c) => {
     FROM questions WHERE status = 'published'
     GROUP BY category_id, type ORDER BY category_id, count DESC, type
   `).all<Record<string, unknown>>();
-  const typeCounts = new Map<number, Array<{ type: string; label: string; count: number }>>();
+  const typeCounts = new Map<number, Map<string, { types: string[]; count: number }>>();
   for (const row of typeResults.results) {
     const categoryId = Number(row.categoryId);
-    const values = typeCounts.get(categoryId) || [];
-    values.push({ type: String(row.type), label: cleanQuestionType(row.type), count: Number(row.count) });
+    const label = cleanQuestionType(row.type);
+    const values = typeCounts.get(categoryId) || new Map<string, { types: string[]; count: number }>();
+    const current = values.get(label) || { types: [], count: 0 };
+    current.types.push(String(row.type));
+    current.count += Number(row.count);
+    values.set(label, current);
     typeCounts.set(categoryId, values);
   }
-  return c.json({ data: results.map((row) => ({ ...row, typeCounts: typeCounts.get(Number(row.id)) || [] })) });
+  return c.json({ data: results.map((row) => ({
+    ...row,
+    typeCounts: [...(typeCounts.get(Number(row.id)) || new Map()).entries()].map(([label, value]) => ({ type: value.types.join(","), label, count: value.count }))
+  })) });
 });
 
 app.get("/api/questions", async (c) => {

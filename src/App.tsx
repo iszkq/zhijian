@@ -102,7 +102,7 @@ function App() {
     const item: Attempt = {
       id: crypto.randomUUID(),
       title: activeConfig.categoryIds.length === 1
-        ? `${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.name}${activeConfig.questionType ? ` · ${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.typeCounts?.find((item) => item.type === activeConfig.questionType)?.label || activeConfig.questionType}` : ""}专项练习`
+        ? `${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.name}${activeConfig.questionType ? ` · ${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.typeCounts?.find((item) => item.type.split(",").includes(activeConfig.questionType!))?.label || activeConfig.questionType}` : ""}专项练习`
         : "行测综合训练",
       categoryNames: catalog.filter((c) => activeConfig.categoryIds.includes(c.id)).map((c) => c.name),
       questionIds: activeQuestions.map((q) => q.id),
