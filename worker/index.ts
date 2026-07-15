@@ -39,7 +39,8 @@ async function sha256(value: string) {
 
 async function hashPassword(password: string, salt: Uint8Array) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 120_000 }, key, 256);
+  // Cloudflare Workers caps PBKDF2 at 100,000 iterations in production.
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 100_000 }, key, 256);
   return bytesToBase64(new Uint8Array(bits));
 }
 
