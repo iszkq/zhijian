@@ -106,6 +106,40 @@ const noisePatterns = [
   /^\d{1,3}\s*$/
 ];
 
+// Headers/footers from the source workbook occasionally get concatenated to
+// the last option or to a paragraph in the analysis. They are not question
+// content and must be removed before either rich text or plain text is saved.
+const artifactPattern = /(?:题目整体评价|练习题\s*\d(?:\s*\d){0,3}\s*套|[A-Za-z四海公考]{1,20}[^\n]{0,25}练习题\s*\d(?:\s*\d){0,3}\s*套|片段阅读\s*[（(]?\s*6\s*0?\s*0[^\n]*)/i;
+const copiedQuestionPattern = /(?:将以上\s*\d+\s*个句子重新排列，语序正确的是：|填入文中画横线部分最恰当的一项是：|(?:这段文字|文段)[^\n]{0,12}(?:主要说明|意在强调|重在说明|接下来最可能讲述的是)：)\s*\n?\s*A[.、]/m;
+
+function artifactIndex(text: string) {
+  return text.search(artifactPattern);
+}
+
+function trimArtifactText(text: string) {
+  const index = artifactIndex(text);
+  const noteBoundary = text.search(/\n\d+\s*(?:行文结构|文段三句话|实战思维)/);
+  const end = [index, noteBoundary].filter((value) => value >= 0).sort((a, b) => a - b)[0];
+  const trimmed = end == null ? text : text.slice(0, end);
+  const copied = copiedQuestionPattern.exec(trimmed);
+  return (copied ? trimmed.slice(0, copied.index) : trimmed).replace(/\n(?:正确题数|错误题数|测试结果|时间|正确数|错误数)\s*/g, "\n").trim();
+}
+
+function trimArtifactRich(segments: RichTextSegment[]) {
+  const text = segments.map((segment) => segment.text).join("");
+  const index = artifactIndex(text);
+  if (index < 0) return segments;
+  const result: RichTextSegment[] = [];
+  let consumed = 0;
+  for (const segment of segments) {
+    if (consumed >= index) break;
+    const keep = Math.min(segment.text.length, index - consumed);
+    if (keep > 0) result.push({ ...segment, text: segment.text.slice(0, keep) });
+    consumed += segment.text.length;
+  }
+  return result;
+}
+
 function normalizeSpace(text: string) {
   return text.replaceAll("\u3000", " ").replaceAll("\u00a0", " ").replaceAll("\t", " ")
     .replace(/[ \r\f\v]+/g, " ").replace(/ *\n */g, "\n").trim();
@@ -312,7 +346,7 @@ function parseQuestionContent(paragraphs: Paragraph[], analysisHeader = false, a
   let spans = findOptionSpans(text.slice(contentStart), !allowPartialOptions);
   if (spans.length < (allowPartialOptions ? 1 : 4)) throw new Error(`未找到完整选项：${text.slice(0, 100)}`);
   spans = spans.map((span) => ({ ...span, start: span.start + contentStart, end: span.end + contentStart }));
-  const stemRich = compressRuns(chars.slice(contentStart, spans[0].start));
+  const stemRich = trimArtifactRich(compressRuns(chars.slice(contentStart, spans[0].start)));
   const options: Option[] = [];
   const optionRich: Record<string, RichTextSegment[]> = {};
   spans.forEach((span, index) => {
@@ -321,8 +355,8 @@ function parseQuestionContent(paragraphs: Paragraph[], analysisHeader = false, a
     const raw = optionChars.map((item) => item.text).join("");
     const cutoff = [raw.indexOf(ANSWER_LABEL), raw.indexOf("【题型"), raw.indexOf(PRACTICAL_LABEL)].filter((value) => value >= 0);
     if (cutoff.length) optionChars = optionChars.slice(0, Math.min(...cutoff));
-    const rich = compressRuns(optionChars);
-    options.push({ label: span.label, content: runsText(rich) });
+    const rich = trimArtifactRich(compressRuns(optionChars));
+    options.push({ label: span.label, content: trimArtifactText(runsText(rich)) });
     optionRich[span.label] = rich;
   });
   return { stemRich, stem: runsText(stemRich), options, optionRich };
@@ -377,6 +411,12 @@ function parseAnalysisCandidate(chunk: Paragraph[]): AnalysisCandidate | null {
     if (!text || isNoise(text)) continue;
     if (text.includes(PRACTICAL_LABEL)) { practicalStarted = true; text = text.split(PRACTICAL_LABEL, 2)[1].trim(); }
     if (!practicalStarted) continue;
+    const noiseAt = artifactIndex(text);
+    if (noiseAt >= 0) {
+      const beforeNoise = text.slice(0, noiseAt).trim();
+      if (beforeNoise) practical.push(beforeNoise);
+      break;
+    }
     if (text.includes(NOTE_LABEL)) {
       const before = text.split(NOTE_LABEL, 1)[0].replace(/[①-⑳㉑-㊿0-9]+$/, "").replace(/^[：: ]+|[：: ]+$/g, "");
       if (before) practical.push(before);
@@ -530,7 +570,7 @@ function extractNotes(document: ParsedDocument, expectedGroups: number) {
   let current: { marker: string; number: number | null; parts: string[] } | null = null;
   const finish = () => {
     if (!current) return;
-    const content = current.parts.map(compactText).filter((value) => value && !isNoise(value)).join("\n").trim();
+    const content = trimArtifactText(current.parts.map(compactText).filter((value) => value && !isNoise(value)).join("\n"));
     records.push({ marker: current.marker, number: current.number, content });
     current = null;
   };
@@ -544,6 +584,15 @@ function extractNotes(document: ParsedDocument, expectedGroups: number) {
       const suffix = text.split(NOTE_LABEL, 2)[1].replace(/^[：: ]+/, "");
       current = { marker: token.token, number: token.number, parts: suffix ? [suffix] : [] };
     } else if (current) {
+      if (artifactIndex(text) >= 0) {
+        current.parts.push(text.slice(0, artifactIndex(text)));
+        finish();
+        continue;
+      }
+      if (/^\d+\s*(?:行文结构|文段三句话|实战思维)/.test(text) && current.parts.length) {
+        finish();
+        continue;
+      }
       if (ANALYSIS_START.test(text) || [ANSWER_LABEL, PRACTICAL_LABEL, "【题型"].some((boundary) => text.includes(boundary))) finish();
       else current.parts.push(text);
     }
@@ -588,7 +637,10 @@ function attachNotes(document: ParsedDocument, bases: WorkingQuestion[]) {
   const expectedGroups = Math.ceil(bases.length / 20);
   const groups = extractNotes(document, expectedGroups);
   bases.forEach((question) => {
-    const combined = [question.annotatedStem, question.practicalAnalysis, ...(question.annotatedOptions ?? []).map((option) => option.content)].filter(Boolean).join(" ");
+  // Only markers printed alongside the annotated question/options are useful
+  // for pairing a note. Numbers mentioned in the explanation (for example
+  // “排除⑨”) are not note anchors and cause unrelated notes to attach.
+  const combined = [question.annotatedStem, ...(question.annotatedOptions ?? []).map((option) => option.content)].filter(Boolean).join(" ");
     question.inlineMarkers = extractInlineMarkers(combined);
     question.notes = [];
   });

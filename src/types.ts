@@ -22,6 +22,7 @@ export interface RichTextSegment {
   bold?: boolean;
   underline?: boolean;
   italic?: boolean;
+  highlight?: boolean;
 }
 
 export interface QuestionDetails {

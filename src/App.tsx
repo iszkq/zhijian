@@ -25,8 +25,31 @@ function RichText({ segments, className = "" }: { segments: RichTextSegment[]; c
   return <span className={`rich-text ${className}`}>{segments.map((segment, index) => {
     const blankUnderline = Boolean(segment.underline) && /^[\s\u00a0]+$/.test(segment.text);
     const style = blankUnderline ? { "--blank-chars": segment.text.length } as CSSProperties : undefined;
-    return <span key={`${index}-${segment.text.slice(0, 8)}`} className={`${segment.bold ? "rich-bold " : ""}${segment.underline ? "rich-underline " : ""}${segment.italic ? "rich-italic " : ""}${blankUnderline ? "rich-blank" : ""}`} style={style}>{blankUnderline ? "\u00a0" : segment.text}</span>;
+    return <span key={`${index}-${segment.text.slice(0, 8)}`} className={`${segment.bold ? "rich-bold " : ""}${segment.underline ? "rich-underline " : ""}${segment.italic ? "rich-italic " : ""}${segment.highlight ? "rich-highlight " : ""}${blankUnderline ? "rich-blank" : ""}`} style={style}>{blankUnderline ? "\u00a0" : segment.text}</span>;
   })}</span>;
+}
+
+function highlightAddedParentheticals(original: string, segments: RichTextSegment[]) {
+  const annotated = segments.map((segment) => segment.text).join("");
+  const compact = (value: string) => value.replace(/\s+/g, "");
+  const ranges: Array<[number, number]> = [];
+  const pattern = /（[^（）\n]{1,60}）|\([^()\n]{1,60}\)/g;
+  for (const match of annotated.matchAll(pattern)) {
+    if (!compact(original).includes(compact(match[0]))) ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  }
+  if (!ranges.length) return segments;
+  const result: RichTextSegment[] = [];
+  let position = 0;
+  for (const segment of segments) {
+    for (const text of Array.from(segment.text)) {
+      const highlighted = ranges.some(([start, end]) => position >= start && position < end);
+      const previous = result.at(-1);
+      if (previous && Boolean(previous.bold) === Boolean(segment.bold) && Boolean(previous.underline) === Boolean(segment.underline) && Boolean(previous.italic) === Boolean(segment.italic) && Boolean(previous.highlight) === highlighted) previous.text += text;
+      else result.push({ text, ...(segment.bold ? { bold: true } : {}), ...(segment.underline ? { underline: true } : {}), ...(segment.italic ? { italic: true } : {}), ...(highlighted ? { highlight: true } : {}) });
+      position += 1;
+    }
+  }
+  return result;
 }
 
 function App() {
@@ -510,7 +533,7 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
             const index = items.findIndex((q) => q.id === item.id);
             const selected = attempt.answers[item.id]?.selected;
             const correct = selected === item.answer;
-            const annotatedReviewStem = expanded.has(item.id) && item.details?.annotatedStem?.length ? item.details.annotatedStem : null;
+            const annotatedReviewStem = expanded.has(item.id) && item.details?.annotatedStem?.length ? highlightAddedParentheticals(item.stem, item.details.annotatedStem) : null;
             return <article className={`review-card ${correct ? "correct" : "wrong"}`} key={item.id}>
               <div className="review-meta"><div><span className="result-stamp">{correct ? <Check size={18} /> : <X size={18} />}{correct ? "正确" : selected ? "错误" : "未答"}</span><span>{index + 1}/{items.length}</span><span>{item.type}</span><span>{item.categoryName}</span></div><b>{correct ? "+1分" : "0分"}</b></div>
               {item.imageUrl && <img className="question-image review-image" src={item.imageUrl} alt="题目材料" />}
@@ -579,7 +602,7 @@ function WrongBook({ attempts, onPractice, navigate }: { attempts: Attempt[]; on
       return <article className={isOpen ? "wrong-row open" : "wrong-row"} key={question.id}>
         <button className="wrong-row-main" onClick={() => toggleDetail(question.id)}>
           <span className="wrong-index">{String(index + 1).padStart(2, "0")}</span>
-          <span className="wrong-question-copy"><span className="wrong-meta"><span>{question.categoryName}</span><span>{question.difficulty}</span><em>累计错 {count} 次</em></span><strong>{isOpen && question.details?.annotatedStem?.length ? <RichText segments={question.details.annotatedStem} /> : question.stem}</strong><small>最近错题：{formatDate(lastAt)}</small></span>
+          <span className="wrong-question-copy"><span className="wrong-meta"><span>{question.categoryName}</span><span>{question.difficulty}</span><em>累计错 {count} 次</em></span><strong>{isOpen && question.details?.annotatedStem?.length ? <RichText segments={highlightAddedParentheticals(question.stem, question.details.annotatedStem)} /> : question.stem}</strong><small>最近错题：{formatDate(lastAt)}</small></span>
           <span className="wrong-row-action"><span className="answer-chip">答案 {question.answer}</span><span className="detail-label">{isOpen ? "收起" : "查看详情"}<ChevronDown size={17} /></span></span>
         </button>
         {isOpen && <div className="wrong-detail">
