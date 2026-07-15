@@ -424,9 +424,24 @@ function inferType(stem: string) {
   return "中心理解题";
 }
 
-function cleanOption(content: string) {
-  return content.replace(/[①-⑳㉑-㊿]+$/, "").trim()
+function cleanOption(content: string, sequenceLimit?: number) {
+  const value = content.trim();
+  // Sorting answers are made entirely of circled numerals. Do not treat the
+  // numerals themselves as a trailing annotation marker (which used to turn
+  // every sorting option into an empty string).
+  if (/^[①-⑳㉑-㊿\s]+$/.test(value)) {
+    const sequence = Array.from(value).filter((char) => circledValues.has(char));
+    return (sequenceLimit ? sequence.slice(0, sequenceLimit) : sequence).join("");
+  }
+  return value.replace(/[①-⑳㉑-㊿]+$/, "").trim()
     .replace(/\s*[（(](?:片面|无中生有|具体类|出处有误|表述有误|强加因果|区别比较联系类|中性表达)[^）)]*[）)]\s*$/, "");
+}
+
+function sortingSequenceLimit(stem: string) {
+  const explicit = /(?:以上|下列)\s*(\d+)\s*个/.exec(stem)?.[1];
+  if (explicit) return Number(explicit);
+  const values = Array.from(stem).flatMap((char) => circledValues.has(char) ? [circledValues.get(char)!] : []);
+  return values.length ? Math.max(...values) : undefined;
 }
 
 function mergeAnalysis(document: ParsedDocument, bases: WorkingQuestion[], filename: string) {
@@ -473,10 +488,16 @@ function mergeAnalysis(document: ParsedDocument, bases: WorkingQuestion[], filen
     }
     Object.assign(base, merged);
     const optionValues = new Map<string, string>();
+    const sequenceLimit = questionType(base.typeAndPassage).includes("语句排序") ? sortingSequenceLimit(base.stem) : undefined;
     const baseComplete = base.options.length === 4 && base.options.every((option) => option.content.trim());
     const annotatedSources = [ordered.annotatedOptions, best.candidate.annotatedOptions, ...choices.map((candidate) => candidate.annotatedOptions)];
     const sources = baseComplete ? [base.options, ...annotatedSources] : [...annotatedSources, base.options];
-    for (const source of sources) for (const option of source ?? []) if (LABELS.includes(option.label) && option.content && !optionValues.has(option.label)) optionValues.set(option.label, cleanOption(option.content));
+    for (const source of sources) for (const option of source ?? []) if (LABELS.includes(option.label) && option.content && !optionValues.has(option.label)) optionValues.set(option.label, cleanOption(option.content, sequenceLimit));
+    const richSources = [ordered.annotatedOptionRich, best.candidate.annotatedOptionRich, ...choices.map((candidate) => candidate.annotatedOptionRich)];
+    for (const source of richSources) for (const [label, rich] of Object.entries(source || {})) {
+      const content = cleanOption(runsText(rich), sequenceLimit);
+      if (LABELS.includes(label) && content && !optionValues.has(label)) optionValues.set(label, content);
+    }
     const repairs = KNOWN_OPTION_REPAIRS[`${base.setNumber}-${base.localNumber}`] ?? {};
     Object.entries(repairs).forEach(([label, content]) => optionValues.set(label, content));
     base.options = LABELS.filter((label) => optionValues.has(label)).map((label) => ({ label, content: optionValues.get(label)! }));
@@ -611,11 +632,37 @@ function insertRichSegment(segments: RichTextSegment[], position: number, insert
   return result;
 }
 
+function splitSortingRich(segments: RichTextSegment[]) {
+  const chars = segments.flatMap((segment) => Array.from(segment.text).map((text) => ({ ...segment, text })));
+  const text = chars.map((char) => char.text).join("");
+  const breaks = new Set<number>();
+  for (let index = 0; index < text.length; index += 1) {
+    if (circledValues.has(text[index]) && index > 0 && text[index - 1] !== "\n") breaks.add(index);
+  }
+  const prompt = text.search(/(?:将以上|将下列)/);
+  if (prompt > 0 && text[prompt - 1] !== "\n") breaks.add(prompt);
+  if (!breaks.size) return segments;
+  const result: RichTextSegment[] = [];
+  const append = (segment: RichTextSegment) => {
+    const previous = result.at(-1);
+    if (previous && Boolean(previous.bold) === Boolean(segment.bold) && Boolean(previous.underline) === Boolean(segment.underline) && Boolean(previous.italic) === Boolean(segment.italic)) previous.text += segment.text;
+    else result.push({ text: segment.text, ...(segment.bold ? { bold: true } : {}), ...(segment.underline ? { underline: true } : {}), ...(segment.italic ? { italic: true } : {}) });
+  };
+  chars.forEach((char, index) => {
+    if (breaks.has(index)) append({ text: "\n" });
+    append(char);
+  });
+  return result;
+}
+
 function repairQuestionFormatting(question: WorkingQuestion) {
   if (questionType(question.typeAndPassage).includes("语句排序")) {
-    const text = question.stemRich.map((run) => run.text).join("");
-    question.stem = text.replace(/\s*(?=[①-⑳])/g, "\n").replace(/^\n/, "").replace(/\n+(?=将以上|将下列)/g, "\n");
-    question.stemRich = [{ text: question.stem }];
+    question.stemRich = splitSortingRich(question.stemRich);
+    question.stem = question.stemRich.map((run) => run.text).join("").replace(/^\n/, "");
+    if (question.annotatedStemRich?.length) {
+      question.annotatedStemRich = splitSortingRich(question.annotatedStemRich);
+      question.annotatedStem = question.annotatedStemRich.map((run) => run.text).join("").replace(/^\n/, "");
+    }
   }
   if (!questionType(question.typeAndPassage).includes("语句填入")) return;
   let rich = question.stemRich.map((segment) => ({ ...segment }));

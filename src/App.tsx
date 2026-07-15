@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   ArrowLeft, ArrowRight, BarChart3, BookCheck, Bookmark, BookmarkCheck, BrainCircuit,
   Check, ChevronDown, ChevronRight, CircleAlert, Clock3, Flame, History, Home as HomeIcon,
@@ -21,7 +22,11 @@ const formatDate = (iso: string) => new Intl.DateTimeFormat("zh-CN", {
 }).format(new Date(iso));
 
 function RichText({ segments, className = "" }: { segments: RichTextSegment[]; className?: string }) {
-  return <span className={`rich-text ${className}`}>{segments.map((segment, index) => <span key={`${index}-${segment.text.slice(0, 8)}`} className={`${segment.bold ? "rich-bold " : ""}${segment.underline ? "rich-underline " : ""}${segment.italic ? "rich-italic" : ""}`}>{segment.text}</span>)}</span>;
+  return <span className={`rich-text ${className}`}>{segments.map((segment, index) => {
+    const blankUnderline = Boolean(segment.underline) && /^[\s\u00a0]+$/.test(segment.text);
+    const style = blankUnderline ? { "--blank-chars": segment.text.length } as CSSProperties : undefined;
+    return <span key={`${index}-${segment.text.slice(0, 8)}`} className={`${segment.bold ? "rich-bold " : ""}${segment.underline ? "rich-underline " : ""}${segment.italic ? "rich-italic " : ""}${blankUnderline ? "rich-blank" : ""}`} style={style}>{blankUnderline ? "\u00a0" : segment.text}</span>;
+  })}</span>;
 }
 
 function App() {
