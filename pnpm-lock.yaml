@@ -11,6 +11,12 @@ importers:
       '@hono/zod-validator':
         specifier: latest
         version: 0.8.0(hono@4.12.30)(zod@4.4.3)
+      '@xmldom/xmldom':
+        specifier: ^0.9.10
+        version: 0.9.10
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       hono:
         specifier: latest
         version: 4.12.30
@@ -38,13 +44,16 @@ importers:
         version: 19.2.3(@types/react@19.2.17)
       '@vitejs/plugin-react':
         specifier: latest
-        version: 6.0.3(vite@8.1.4(esbuild@0.28.1))
+        version: 6.0.3(vite@8.1.4(esbuild@0.28.1)(tsx@4.23.1))
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
       typescript:
         specifier: latest
         version: 7.0.2
       vite:
         specifier: latest
-        version: 8.1.4(esbuild@0.28.1)
+        version: 8.1.4(esbuild@0.28.1)(tsx@4.23.1)
       wrangler:
         specifier: latest
         version: 4.110.0(@cloudflare/workers-types@5.20260714.1)
@@ -705,6 +714,10 @@ packages:
       babel-plugin-react-compiler:
         optional: true
 
+  '@xmldom/xmldom@0.9.10':
+    resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
+    engines: {node: '>=14.6'}
+
   blake3-wasm@2.1.5:
     resolution: {integrity: sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g==}
 
@@ -735,6 +748,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -895,6 +911,11 @@ packages:
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
+  tsx@4.23.1:
+    resolution: {integrity: sha512-GQHnkIfxyx1wYCOS/wonik5MVRZU9hi1TEZmzGZSCJB1y9YgoZ8H6itNE/u4suE+yLmOzuE4E5S4TZ/ZX2wcWQ==}
+    engines: {node: '>=18.0.0'}
+    hasBin: true
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -1376,10 +1397,12 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vitejs/plugin-react@6.0.3(vite@8.1.4(esbuild@0.28.1))':
+  '@vitejs/plugin-react@6.0.3(vite@8.1.4(esbuild@0.28.1)(tsx@4.23.1))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
-      vite: 8.1.4(esbuild@0.28.1)
+      vite: 8.1.4(esbuild@0.28.1)(tsx@4.23.1)
+
+  '@xmldom/xmldom@0.9.10': {}
 
   blake3-wasm@2.1.5: {}
 
@@ -1423,6 +1446,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
+
+  fflate@0.8.3: {}
 
   fsevents@2.3.3:
     optional: true
@@ -1587,6 +1612,12 @@ snapshots:
   tslib@2.8.1:
     optional: true
 
+  tsx@4.23.1:
+    dependencies:
+      esbuild: 0.28.1
+    optionalDependencies:
+      fsevents: 2.3.3
+
   typescript@7.0.2:
     optionalDependencies:
       '@typescript/typescript-aix-ppc64': 7.0.2
@@ -1616,7 +1647,7 @@ snapshots:
     dependencies:
       pathe: 2.0.3
 
-  vite@8.1.4(esbuild@0.28.1):
+  vite@8.1.4(esbuild@0.28.1)(tsx@4.23.1):
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.5
@@ -1626,6 +1657,7 @@ snapshots:
     optionalDependencies:
       esbuild: 0.28.1
       fsevents: 2.3.3
+      tsx: 4.23.1
 
   workerd@1.20260708.1:
     optionalDependencies:

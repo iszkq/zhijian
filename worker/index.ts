@@ -36,6 +36,7 @@ function parseQuestionDetails(value: unknown) {
       set: details.set ?? details.setNumber,
       number: details.number ?? details.localNumber,
       typeLabel: details.typeLabel ?? details.typeAndPassage,
+      stemRich: details.stemRich,
       annotatedStem: details.annotatedStem ?? details.annotatedStemRich,
       annotatedOptions: optionRich,
       practical: details.practical ?? details.practicalAnalysis,
@@ -128,6 +129,8 @@ app.get("/api/health/ready", async (c) => {
     roleColumn: false,
     statusColumn: false,
     imageColumn: false,
+    detailsColumn: false,
+    importTables: false,
     passwordCrypto: false
   };
   try {
@@ -137,7 +140,9 @@ app.get("/api/health/ready", async (c) => {
         EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'user_sessions') AS sessions_table,
         EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name = 'role') AS role_column,
         EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name = 'status') AS status_column,
-        EXISTS(SELECT 1 FROM pragma_table_info('questions') WHERE name = 'image_key') AS image_column
+        EXISTS(SELECT 1 FROM pragma_table_info('questions') WHERE name = 'image_key') AS image_column,
+        EXISTS(SELECT 1 FROM pragma_table_info('questions') WHERE name = 'details_json') AS details_column,
+        EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'question_imports') AS import_tables
     `).first<Record<string, number>>();
     readiness.database = true;
     readiness.usersTable = Boolean(row?.users_table);
@@ -145,6 +150,8 @@ app.get("/api/health/ready", async (c) => {
     readiness.roleColumn = Boolean(row?.role_column);
     readiness.statusColumn = Boolean(row?.status_column);
     readiness.imageColumn = Boolean(row?.image_column);
+    readiness.detailsColumn = Boolean(row?.details_column);
+    readiness.importTables = Boolean(row?.import_tables);
   } catch (error) {
     console.error("readiness database check failed", error);
   }
@@ -271,14 +278,19 @@ app.get("/api/questions", async (c) => {
     ORDER BY RANDOM() LIMIT ?
   `).bind(...ids, count);
   const { results } = await statement.all<Record<string, unknown>>();
-  return c.json({ data: results.map((row) => ({
-    ...row,
-    options: JSON.parse(String(row.optionsJson)),
-    details: parseQuestionDetails(row.detailsJson),
-    imageUrl: row.imageKey ? `/api/media/${row.imageKey}` : null,
-    optionsJson: undefined,
-    imageKey: undefined
-  })) });
+  return c.json({ data: results.map((row) => {
+    const details = parseQuestionDetails(row.detailsJson);
+    return {
+      ...row,
+      options: JSON.parse(String(row.optionsJson)),
+      stemRich: details?.stemRich,
+      details,
+      imageUrl: row.imageKey ? `/api/media/${row.imageKey}` : null,
+      optionsJson: undefined,
+      imageKey: undefined,
+      detailsJson: undefined
+    };
+  }) });
 });
 
 app.get("/api/media/:key", async (c) => {
@@ -412,11 +424,128 @@ app.get("/api/admin/questions", async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT q.id, q.category_id AS categoryId, c.name AS categoryName, q.type, q.stem,
       q.options_json AS optionsJson, q.answer, q.explanation, q.source, q.difficulty,
-      q.status, q.image_key AS imageKey, q.details_json AS detailsJson, q.created_at AS createdAt, q.updated_at AS updatedAt
+      q.status, q.image_key AS imageKey, q.created_at AS createdAt, q.updated_at AS updatedAt
     FROM questions q JOIN categories c ON c.id = q.category_id
     ORDER BY q.updated_at DESC, q.id DESC
   `).all<Record<string, unknown>>();
-  return c.json({ data: results.map((row) => ({ ...row, options: JSON.parse(String(row.optionsJson)), details: parseQuestionDetails(row.detailsJson), imageUrl: row.imageKey ? `/api/media/${row.imageKey}` : null, optionsJson: undefined })) });
+  return c.json({ data: results.map((row) => ({ ...row, options: JSON.parse(String(row.optionsJson)), imageUrl: row.imageKey ? `/api/media/${row.imageKey}` : null, optionsJson: undefined })) });
+});
+
+const importModeSchema = z.enum(["append", "replace"]);
+const importQuestionSchema = z.object({
+  position: z.number().int().nonnegative().max(100000),
+  importKey: z.string().regex(/^[a-f0-9]{64}$/),
+  type: z.string().trim().min(1).max(50),
+  stem: z.string().trim().min(1).max(15000),
+  options: z.array(z.object({ label: z.string().min(1).max(2), content: z.string().trim().min(1).max(2000) })).min(2).max(8),
+  answer: z.string().min(1).max(2),
+  explanation: z.string().max(50000),
+  source: z.string().trim().min(1).max(200),
+  difficulty: z.enum(["基础", "进阶", "挑战"]),
+  status: z.enum(["published", "draft"]),
+  details: z.record(z.string(), z.unknown())
+}).refine((data) => data.options.some((option) => option.label === data.answer), { message: "参考答案没有对应选项" });
+
+const createImportSchema = z.object({
+  categoryId: z.number().int().positive(),
+  mode: importModeSchema,
+  label: z.string().trim().max(200).default("Word 批量导入"),
+  totalCount: z.number().int().positive().max(10000)
+});
+
+app.post("/api/admin/imports", zValidator("json", createImportSchema), async (c) => {
+  const data = c.req.valid("json");
+  const category = await c.env.DB.prepare("SELECT id FROM categories WHERE id = ?").bind(data.categoryId).first();
+  if (!category) return c.json({ error: "导入分类不存在" }, 404);
+  const id = crypto.randomUUID();
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM question_import_items WHERE import_id IN (SELECT id FROM question_imports WHERE status = 'uploading' AND created_at < datetime('now', '-1 day'))"),
+    c.env.DB.prepare("DELETE FROM question_imports WHERE status = 'uploading' AND created_at < datetime('now', '-1 day')"),
+    c.env.DB.prepare(`INSERT INTO question_imports (id, category_id, mode, label, total_count) VALUES (?, ?, ?, ?, ?)`)
+      .bind(id, data.categoryId, data.mode, data.label, data.totalCount)
+  ]);
+  return c.json({ id, receivedCount: 0 }, 201);
+});
+
+const importBatchSchema = z.object({ questions: z.array(importQuestionSchema).min(1).max(25) });
+
+app.put("/api/admin/imports/:id/items", zValidator("json", importBatchSchema), async (c) => {
+  const importId = c.req.param("id");
+  const session = await c.env.DB.prepare("SELECT status, total_count AS totalCount FROM question_imports WHERE id = ?")
+    .bind(importId).first<{ status: string; totalCount: number }>();
+  if (!session) return c.json({ error: "导入任务不存在" }, 404);
+  if (session.status !== "uploading") return c.json({ error: "导入任务已结束" }, 409);
+  const questions = c.req.valid("json").questions;
+  await c.env.DB.batch(questions.map((question) => c.env.DB.prepare(`
+    INSERT INTO question_import_items (
+      import_id, position, import_key, type, stem, options_json, answer, explanation, source, difficulty, status, details_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(import_id, position) DO UPDATE SET
+      import_key = excluded.import_key, type = excluded.type, stem = excluded.stem,
+      options_json = excluded.options_json, answer = excluded.answer, explanation = excluded.explanation,
+      source = excluded.source, difficulty = excluded.difficulty, status = excluded.status, details_json = excluded.details_json
+  `).bind(
+    importId, question.position, question.importKey, question.type, question.stem, JSON.stringify(question.options),
+    question.answer, question.explanation, question.source, question.difficulty, question.status, JSON.stringify(question.details)
+  )));
+  const count = await c.env.DB.prepare("SELECT COUNT(*) AS count FROM question_import_items WHERE import_id = ?")
+    .bind(importId).first<{ count: number }>();
+  await c.env.DB.prepare("UPDATE question_imports SET received_count = ? WHERE id = ?").bind(count?.count ?? 0, importId).run();
+  return c.json({ ok: true, receivedCount: count?.count ?? 0, totalCount: session.totalCount });
+});
+
+app.post("/api/admin/imports/:id/finalize", async (c) => {
+  const importId = c.req.param("id");
+  const session = await c.env.DB.prepare(`
+    SELECT id, category_id AS categoryId, mode, status, total_count AS totalCount,
+      (SELECT COUNT(*) FROM question_import_items WHERE import_id = question_imports.id) AS receivedCount
+    FROM question_imports WHERE id = ?
+  `).bind(importId).first<{ id: string; categoryId: number; mode: "append" | "replace"; status: string; totalCount: number; receivedCount: number }>();
+  if (!session) return c.json({ error: "导入任务不存在" }, 404);
+  if (session.status !== "uploading") return c.json({ error: "导入任务已结束" }, 409);
+  if (session.receivedCount !== session.totalCount) return c.json({ error: `仅收到 ${session.receivedCount}/${session.totalCount} 道题，请继续上传` }, 409);
+
+  const statements: D1PreparedStatement[] = [];
+  if (session.mode === "replace") {
+    statements.push(c.env.DB.prepare("DELETE FROM questions WHERE category_id = ?").bind(session.categoryId));
+  } else {
+    statements.push(c.env.DB.prepare(`
+      UPDATE questions SET import_key = (
+        SELECT i.import_key FROM question_import_items i
+        WHERE i.import_id = ? AND i.stem = questions.stem AND i.options_json = questions.options_json LIMIT 1
+      )
+      WHERE category_id = ? AND import_key IS NULL AND EXISTS (
+        SELECT 1 FROM question_import_items i
+        WHERE i.import_id = ? AND i.stem = questions.stem AND i.options_json = questions.options_json
+      )
+    `).bind(importId, session.categoryId, importId));
+  }
+  statements.push(c.env.DB.prepare(`
+    INSERT INTO questions (
+      category_id, type, stem, options_json, answer, explanation, source, difficulty, status, details_json, import_key
+    )
+    SELECT ?, type, stem, options_json, answer, explanation, source, difficulty, status, details_json, import_key
+    FROM question_import_items WHERE import_id = ?
+    ON CONFLICT(import_key) DO UPDATE SET
+      category_id = excluded.category_id, type = excluded.type, stem = excluded.stem,
+      options_json = excluded.options_json, answer = excluded.answer, explanation = excluded.explanation,
+      source = excluded.source, difficulty = excluded.difficulty, status = excluded.status,
+      details_json = excluded.details_json, updated_at = CURRENT_TIMESTAMP
+  `).bind(session.categoryId, importId));
+  statements.push(c.env.DB.prepare("UPDATE question_imports SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?").bind(importId));
+  statements.push(c.env.DB.prepare("DELETE FROM question_import_items WHERE import_id = ?").bind(importId));
+  await c.env.DB.batch(statements);
+  const count = await c.env.DB.prepare("SELECT COUNT(*) AS count FROM questions WHERE category_id = ?").bind(session.categoryId).first<{ count: number }>();
+  return c.json({ ok: true, importedCount: session.totalCount, categoryQuestionCount: count?.count ?? 0 });
+});
+
+app.delete("/api/admin/imports/:id", async (c) => {
+  const importId = c.req.param("id");
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM question_import_items WHERE import_id = ?").bind(importId),
+    c.env.DB.prepare("UPDATE question_imports SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'uploading'").bind(importId)
+  ]);
+  return c.json({ ok: true });
 });
 
 app.post("/api/admin/questions", zValidator("json", questionSchema), async (c) => {

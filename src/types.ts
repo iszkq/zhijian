@@ -39,7 +39,7 @@ export interface Question {
   id: number;
   categoryId: number;
   categoryName: string;
-  type: "单选题";
+  type: string;
   stem: string;
   options: Option[];
   answer: string;
