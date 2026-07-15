@@ -46,6 +46,9 @@ function parseQuestionDetails(value: unknown) {
     return undefined;
   }
 }
+function cleanQuestionType(value: unknown) {
+  return String(value || "片段阅读").replace(/[①-㊿0-9]+$/g, "").trim() || "片段阅读";
+}
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
 const bytesToBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
@@ -262,26 +265,42 @@ app.get("/api/categories", async (c) => {
     FROM categories c LEFT JOIN questions q ON q.category_id = c.id AND q.status = 'published'
     GROUP BY c.id ORDER BY c.sort_order
   `).all();
-  return c.json({ data: results });
+  const typeResults = await c.env.DB.prepare(`
+    SELECT category_id AS categoryId, type, COUNT(*) AS count
+    FROM questions WHERE status = 'published'
+    GROUP BY category_id, type ORDER BY category_id, count DESC, type
+  `).all<Record<string, unknown>>();
+  const typeCounts = new Map<number, Array<{ type: string; label: string; count: number }>>();
+  for (const row of typeResults.results) {
+    const categoryId = Number(row.categoryId);
+    const values = typeCounts.get(categoryId) || [];
+    values.push({ type: String(row.type), label: cleanQuestionType(row.type), count: Number(row.count) });
+    typeCounts.set(categoryId, values);
+  }
+  return c.json({ data: results.map((row) => ({ ...row, typeCounts: typeCounts.get(Number(row.id)) || [] })) });
 });
 
 app.get("/api/questions", async (c) => {
   const ids = (c.req.query("categoryIds") || "1,2,3,4,5").split(",").map(Number).filter(Boolean).slice(0, 5);
   const count = Math.min(100, Math.max(1, Number(c.req.query("count") || 10)));
+  const types = (c.req.query("types") || "").split(",").map((value) => value.trim()).filter(Boolean).slice(0, 20);
   const placeholders = ids.map(() => "?").join(",");
+  const typePlaceholders = types.map(() => "?").join(",");
+  const typeFilter = types.length ? ` AND q.type IN (${typePlaceholders})` : "";
   const statement = c.env.DB.prepare(`
     SELECT q.id, q.category_id AS categoryId, c.name AS categoryName, q.type, q.stem,
            q.options_json AS optionsJson, q.answer, q.explanation, q.source, q.difficulty,
            q.image_key AS imageKey, q.status, q.details_json AS detailsJson
     FROM questions q JOIN categories c ON c.id = q.category_id
-    WHERE q.status = 'published' AND q.category_id IN (${placeholders})
+    WHERE q.status = 'published' AND q.category_id IN (${placeholders})${typeFilter}
     ORDER BY RANDOM() LIMIT ?
-  `).bind(...ids, count);
+  `).bind(...ids, ...types, count);
   const { results } = await statement.all<Record<string, unknown>>();
   return c.json({ data: results.map((row) => {
     const details = parseQuestionDetails(row.detailsJson);
     return {
       ...row,
+      type: cleanQuestionType(row.type),
       options: JSON.parse(String(row.optionsJson)),
       stemRich: details?.stemRich,
       details,

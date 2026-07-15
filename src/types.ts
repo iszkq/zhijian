@@ -9,6 +9,7 @@ export interface Category {
   color: string;
   softColor: string;
   questionCount: number;
+  typeCounts?: Array<{ type: string; label: string; count: number }>;
 }
 
 export interface Option {
@@ -56,6 +57,7 @@ export interface PracticeConfig {
   categoryIds: number[];
   count: number;
   durationMinutes: number | null;
+  questionType?: string;
 }
 
 export interface AnswerState {

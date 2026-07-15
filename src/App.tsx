@@ -78,9 +78,9 @@ function App() {
     let selected = presetQuestions;
     if (!selected) {
       try {
-        selected = await fetchPracticeQuestions(config.categoryIds, config.count);
+        selected = await fetchPracticeQuestions(config.categoryIds, config.count, config.questionType);
       } catch {
-        selected = getQuestions(config.categoryIds, config.count);
+        selected = getQuestions(config.categoryIds, config.count, config.questionType);
       }
     }
     const initial = Object.fromEntries(selected.map((item) => [item.id, { selected: null, marked: false }]));
@@ -102,7 +102,7 @@ function App() {
     const item: Attempt = {
       id: crypto.randomUUID(),
       title: activeConfig.categoryIds.length === 1
-        ? `${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.name}专项练习`
+        ? `${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.name}${activeConfig.questionType ? ` · ${catalog.find((c) => c.id === activeConfig.categoryIds[0])?.typeCounts?.find((item) => item.type === activeConfig.questionType)?.label || activeConfig.questionType}` : ""}专项练习`
         : "行测综合训练",
       categoryNames: catalog.filter((c) => activeConfig.categoryIds.includes(c.id)).map((c) => c.name),
       questionIds: activeQuestions.map((q) => q.id),
@@ -260,6 +260,7 @@ function Home({ attempts, categoriesList, startPractice, navigate }: {
   const [selected, setSelected] = useState<number[]>(categoriesList.map((c) => c.id));
   const [count, setCount] = useState(10);
   const [duration, setDuration] = useState<number | null>(null);
+  const [specialtyCategory, setSpecialtyCategory] = useState<Category | null>(null);
   const totalAvailable = categoriesList.filter((c) => selected.includes(c.id)).reduce((sum, c) => sum + c.questionCount, 0);
   const totalAnswered = attempts.reduce((sum, a) => sum + a.questionIds.length, 0);
   const totalCorrect = attempts.reduce((sum, a) => sum + a.correctCount, 0);
@@ -348,13 +349,21 @@ function Home({ attempts, categoriesList, startPractice, navigate }: {
           <div className="mini-heading"><div><LayoutGrid size={19} /><h2>专项题库</h2></div><span>针对薄弱项逐个击破</span></div>
           <div className="category-cards">
             {categoriesList.map((category) => (
-              <button key={category.id} className="category-card" style={{ "--cat": category.color, "--soft": category.softColor } as React.CSSProperties} onClick={() => startPractice({ categoryIds: [category.id], count: 5, durationMinutes: null })}>
+              <button key={category.id} className={specialtyCategory?.id === category.id ? "category-card active" : "category-card"} style={{ "--cat": category.color, "--soft": category.softColor } as React.CSSProperties} onClick={() => setSpecialtyCategory(category)}>
                 <span className="category-glyph">{category.shortName.slice(0, 1)}</span>
                 <span><b>{category.name}</b><small>{category.description}</small></span>
                 <ChevronRight size={19} />
               </button>
             ))}
           </div>
+          {specialtyCategory && <div className="specialty-picker" style={{ "--cat": specialtyCategory.color, "--soft": specialtyCategory.softColor } as React.CSSProperties}>
+            <div className="specialty-picker-head"><div><b>{specialtyCategory.name} · 选择题型</b><small>按题型进行专项训练</small></div><button onClick={() => setSpecialtyCategory(null)}>收起</button></div>
+            <div className="specialty-type-grid">
+              {(specialtyCategory.typeCounts || []).map((item) => <button key={item.type} onClick={() => startPractice({ categoryIds: [specialtyCategory.id], questionType: item.type, count: Math.min(5, item.count), durationMinutes: null })}><span><b>{item.label}</b><small>{item.count} 题可练</small></span><ChevronRight size={17} /></button>)}
+              {!specialtyCategory.typeCounts?.length && <p>该分类暂未提供题型细分，将进入综合专项练习。</p>}
+              {!specialtyCategory.typeCounts?.length && <button className="specialty-all-button" onClick={() => startPractice({ categoryIds: [specialtyCategory.id], count: Math.min(5, specialtyCategory.questionCount), durationMinutes: null })}>进入全部题目 <ChevronRight size={17} /></button>}
+            </div>
+          </div>}
         </div>
         <aside className="recent-panel">
           <div className="mini-heading"><div><History size={19} /><h2>最近练习</h2></div>{attempts.length > 0 && <button onClick={() => navigate("history")}>全部</button>}</div>
@@ -496,10 +505,11 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
             const index = items.findIndex((q) => q.id === item.id);
             const selected = attempt.answers[item.id]?.selected;
             const correct = selected === item.answer;
+            const annotatedReviewStem = expanded.has(item.id) && item.details?.annotatedStem?.length ? item.details.annotatedStem : null;
             return <article className={`review-card ${correct ? "correct" : "wrong"}`} key={item.id}>
               <div className="review-meta"><div><span className="result-stamp">{correct ? <Check size={18} /> : <X size={18} />}{correct ? "正确" : selected ? "错误" : "未答"}</span><span>{index + 1}/{items.length}</span><span>{item.type}</span><span>{item.categoryName}</span></div><b>{correct ? "+1分" : "0分"}</b></div>
               {item.imageUrl && <img className="question-image review-image" src={item.imageUrl} alt="题目材料" />}
-              {item.stemRich?.length ? <div className="review-stem"><RichText segments={item.stemRich} /></div> : <p className="review-stem">{item.stem}</p>}
+              {annotatedReviewStem ? <div className="review-stem review-stem-annotated"><RichText segments={annotatedReviewStem} /></div> : item.stemRich?.length ? <div className="review-stem"><RichText segments={item.stemRich} /></div> : <p className="review-stem">{item.stem}</p>}
               <div className="review-options">{item.options.map((option) => {
                 const isAnswer = option.label === item.answer;
                 const isSelected = option.label === selected;
@@ -509,7 +519,6 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
               {expanded.has(item.id) && <div className="analysis-box">
                 <div><b>答案</b><span>{item.answer}</span><i />难度：{item.difficulty}<i />来源：{item.source}</div>
                 {item.details?.typeLabel && <p className="analysis-type"><strong>题型与文段类型</strong>{item.details.typeLabel}</p>}
-                {item.details?.annotatedStem?.length ? <div className="analysis-annotated"><strong>批注原文</strong><RichText segments={item.details.annotatedStem} /></div> : null}
                 {item.details?.notes?.length ? <div className="analysis-notes"><strong>相关批注</strong>{item.details.notes.map((note) => <p key={`${item.id}-${note.marker}`}><b>{note.marker}花生批注：</b>{note.text}</p>)}</div> : null}
                 <p><strong>实战解析</strong>{item.details?.practical || item.explanation}</p>
               </div>}
@@ -565,13 +574,13 @@ function WrongBook({ attempts, onPractice, navigate }: { attempts: Attempt[]; on
       return <article className={isOpen ? "wrong-row open" : "wrong-row"} key={question.id}>
         <button className="wrong-row-main" onClick={() => toggleDetail(question.id)}>
           <span className="wrong-index">{String(index + 1).padStart(2, "0")}</span>
-          <span className="wrong-question-copy"><span className="wrong-meta"><span>{question.categoryName}</span><span>{question.difficulty}</span><em>累计错 {count} 次</em></span><strong>{question.stem}</strong><small>最近错题：{formatDate(lastAt)}</small></span>
+          <span className="wrong-question-copy"><span className="wrong-meta"><span>{question.categoryName}</span><span>{question.difficulty}</span><em>累计错 {count} 次</em></span><strong>{isOpen && question.details?.annotatedStem?.length ? <RichText segments={question.details.annotatedStem} /> : question.stem}</strong><small>最近错题：{formatDate(lastAt)}</small></span>
           <span className="wrong-row-action"><span className="answer-chip">答案 {question.answer}</span><span className="detail-label">{isOpen ? "收起" : "查看详情"}<ChevronDown size={17} /></span></span>
         </button>
         {isOpen && <div className="wrong-detail">
           {question.imageUrl && <img className="question-image wrong-detail-image" src={question.imageUrl} alt="题目材料" />}
           <div className="wrong-detail-options">{question.options.map((option) => <div key={option.label} className={`${option.label === question.answer ? "correct" : ""} ${option.label === selected ? "selected" : ""}`}><span>{option.label}</span><b>{option.content}</b>{option.label === question.answer && <em><Check size={15} />正确答案</em>}{option.label === selected && option.label !== question.answer && <em><X size={15} />你的答案</em>}</div>)}</div>
-          <div className="wrong-analysis"><div><BookCheck size={19} /><b>题目解析</b><span>难度：{question.difficulty}</span><span>来源：{question.source}</span></div>{question.details?.typeLabel && <p><b>题型与文段类型：</b>{question.details.typeLabel}</p>}{question.details?.annotatedStem?.length ? <p><b>批注原文：</b><RichText segments={question.details.annotatedStem} /></p> : null}{question.details?.notes?.map((note) => <p key={`${question.id}-${note.marker}`}><b>{note.marker}花生批注：</b>{note.text}</p>)}<p>{question.details?.practical || question.explanation}</p></div>
+          <div className="wrong-analysis"><div><BookCheck size={19} /><b>题目解析</b><span>难度：{question.difficulty}</span><span>来源：{question.source}</span></div>{question.details?.typeLabel && <p><b>题型与文段类型：</b>{question.details.typeLabel}</p>}{question.details?.notes?.map((note) => <p key={`${question.id}-${note.marker}`}><b>{note.marker}花生批注：</b>{note.text}</p>)}<p>{question.details?.practical || question.explanation}</p></div>
         </div>}
       </article>;
     })}</div> : <EmptyState icon={NotebookTabs} title="错题本还是空的" text="答错的题目会自动收录到这里，方便你集中复习" action="去做一组题" onClick={() => navigate("home")} />}

@@ -16,8 +16,9 @@ export async function fetchCategories(): Promise<Category[]> {
   return payload.data;
 }
 
-export async function fetchPracticeQuestions(categoryIds: number[], count: number): Promise<Question[]> {
+export async function fetchPracticeQuestions(categoryIds: number[], count: number, questionType?: string): Promise<Question[]> {
   const params = new URLSearchParams({ categoryIds: categoryIds.join(","), count: String(count) });
+  if (questionType) params.set("types", questionType);
   const payload = await request<{ data: Question[] }>(`/api/questions?${params}`);
   return payload.data;
 }
