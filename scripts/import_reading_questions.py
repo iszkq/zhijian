@@ -634,13 +634,26 @@ def attach_notes(path: Path, bases: list[dict[str, object]]) -> tuple[int, int]:
                 continue
             number = note.get("number")
             eligible = [question for question in questions if number in question.get("inlineMarkers", [])]
-            pool = eligible or questions
-            ranked = sorted(
-                ((note_similarity(str(note["content"]), question), question) for question in pool),
+            all_ranked = sorted(
+                ((note_similarity(str(note["content"]), question), question) for question in questions),
                 key=lambda item: item[0],
                 reverse=True,
             )
-            score, selected = ranked[0]
+            eligible_ranked = sorted(
+                ((note_similarity(str(note["content"]), question), question) for question in eligible),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            # A marker is only a candidate hint. If the best content match is
+            # materially stronger than the marker-selected question, prefer
+            # content so misplaced/duplicated marker numbers cannot scramble
+            # annotations.
+            if eligible_ranked and eligible_ranked[0][0] >= all_ranked[0][0] - 0.10:
+                score, selected = eligible_ranked[0]
+                pairing_mode = "marker-and-content"
+            else:
+                score, selected = all_ranked[0]
+                pairing_mode = "content-similarity"
             if score < 0.10 and not eligible:
                 unmatched += 1
             selected["notes"].append(
@@ -650,6 +663,7 @@ def attach_notes(path: Path, bases: list[dict[str, object]]) -> tuple[int, int]:
                     "content": note["content"],
                     "matchScore": round(score, 4),
                     "order": position,
+                    "pairingMode": pairing_mode,
                 }
             )
             attached += 1
@@ -696,7 +710,13 @@ def build_record(question: dict[str, object], global_number: int) -> dict[str, o
         "annotatedOptionRich": question.get("annotatedOptionRich"),
         "practicalAnalysis": practical,
         "notes": [
-            {"marker": note["marker"], "content": note["content"]}
+            {
+                "marker": note["marker"],
+                "content": note["content"],
+                "matchScore": note.get("matchScore"),
+                "pairingMode": note.get("pairingMode"),
+                "order": note.get("order"),
+            }
             for note in notes
         ],
         "pairingMode": question.get("pairingMode"),
@@ -759,10 +779,9 @@ def validate(records: list[dict[str, object]]) -> dict[str, object]:
 
 def write_sql(records: list[dict[str, object]], output: Path) -> None:
     lines = [
-        "-- Replace the 25 demo questions with the 600 paired passage-reading questions.",
-        "-- Detailed annotations are stored as JSON; media should remain in R2.",
-        "ALTER TABLE questions ADD COLUMN details_json TEXT CHECK(details_json IS NULL OR json_valid(details_json));",
-        "DELETE FROM questions;",
+        "-- Refresh the 600 passage-reading questions while preserving their IDs.",
+        "-- Preserving IDs keeps existing attempts and the wrongbook linked to the refreshed questions.",
+        "DELETE FROM questions WHERE category_id = 3;",
         "",
     ]
     for record in records:
@@ -789,17 +808,25 @@ def write_sql(records: list[dict[str, object]], output: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pair and import the 600 passage-reading questions from four Word documents.")
-    parser.add_argument("--desktop", type=Path, default=Path.home() / "Desktop")
+    default_desktop = Path.home() / "Desktop" / "三板块"
+    parser.add_argument("--desktop", type=Path, default=default_desktop if default_desktop.exists() else Path.home() / "Desktop")
     parser.add_argument("--output-json", type=Path, default=Path("generated/reading-600.json"))
     parser.add_argument("--output-sql", type=Path, default=Path("migrations/0005_replace_with_reading_600.sql"))
     parser.add_argument("--report", type=Path, default=Path("generated/reading-600-report.json"))
     args = parser.parse_args()
 
     desktop = args.desktop
-    book_up = next(desktop.glob("*片段阅读600题-题本【上】.docx"))
-    book_down = next(desktop.glob("*片段阅读600题-题本【下】.docx"))
-    analysis_up = next(desktop.glob("*片段阅读600题-解析【上】.docx"))
-    analysis_down = next(desktop.glob("*片段阅读600题-解析【下】.docx"))
+    def find_document(kind: str, volume: str) -> Path:
+        suffix = f"{kind}【{volume}】.docx"
+        matches = sorted(path for path in desktop.iterdir() if path.is_file() and path.name.endswith(suffix))
+        if not matches:
+            raise FileNotFoundError(f"找不到{kind}{volume}册 DOCX")
+        return matches[0]
+
+    book_up = find_document("题本", "上")
+    book_down = find_document("题本", "下")
+    analysis_up = find_document("解析", "上")
+    analysis_down = find_document("解析", "下")
 
     upper = parse_book(book_up, 1)
     lower = parse_book(book_down, 16)

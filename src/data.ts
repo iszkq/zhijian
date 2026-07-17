@@ -1,7 +1,7 @@
 import importedQuestions from "./fragmentQuestions.json";
 import type { Category, Question } from "./types";
 
-export const questions = importedQuestions as Question[];
+export const questions = importedQuestions as unknown as Question[];
 const cleanType = (value: string) => {
   const text = value.replace(/[①-㊿0-9]+$/g, "").trim();
   const known: Array<[string, string]> = [["中心理解", "中心理解题"], ["语句填入", "语句填入类"], ["语句排序", "语句排序类"], ["下文推断", "下文推断类"], ["细节判断", "细节判断类"], ["标题", "标题拟定类"], ["词句理解", "词句理解题"], ["观点态度", "观点态度题"], ["上文推断", "上文推断类"]];
