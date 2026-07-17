@@ -342,8 +342,10 @@ app.get("/api/questions/by-ids", async (c) => {
   return c.json({ data: ids.flatMap((id) => byId.has(id) ? [byId.get(id)] : []) });
 });
 
-app.get("/api/media/:key", async (c) => {
-  const object = await c.env.MEDIA.get(c.req.param("key"));
+app.get("/api/media/*", async (c) => {
+  const prefix = "/api/media/";
+  const key = c.req.path.startsWith(prefix) ? c.req.path.slice(prefix.length) : "";
+  const object = await c.env.MEDIA.get(key);
   if (!object) return c.json({ error: "图片不存在" }, 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
