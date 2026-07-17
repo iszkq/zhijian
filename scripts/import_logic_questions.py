@@ -207,7 +207,7 @@ def convert(source: Path, static_output: Path, migration_output: Path, explanati
                   sql_quote(record["status"]), sql_quote(json.dumps(record["details"], ensure_ascii=False, separators=(",", ":")))]
         sql.append("INSERT INTO questions (id, category_id, type, stem, options_json, answer, explanation, source, difficulty, status, details_json) VALUES (" + ",".join(values) + ");")
     existing = json.loads(static_output.read_text(encoding="utf-8")) if static_output.exists() else []
-    existing = [question for question in existing if question.get("categoryId") != 6]
+    existing = [question for question in existing if question.get("categoryId") not in {4, 5, 6}]
     static_output.write_text(json.dumps(existing + logic, ensure_ascii=False, indent=2), encoding="utf-8")
     migration_output.write_text("\n".join(sql) + "\n", encoding="utf-8")
     return {"logicQuestions": len(logic), "totalStaticQuestions": len(existing) + len(logic), "answers": sum(bool(q["answer"]) for q in logic)}
