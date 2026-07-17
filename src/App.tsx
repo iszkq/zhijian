@@ -359,7 +359,7 @@ function Home({ attempts, categoriesList, startPractice, navigate }: {
         </div>
 
         <div className="builder-block">
-          <div className="builder-label"><span>1</span><div><b>选择题型</b><small>可多选</small></div><button onClick={() => setSelected(categoriesList.map((c) => c.id))}>全选</button></div>
+          <div className="builder-label"><span>1</span><div><b>选择题型</b><small>可多选</small></div><button onClick={() => setSelected((prev) => prev.length === categoriesList.length ? [] : categoriesList.map((c) => c.id))}>{selected.length === categoriesList.length ? "取消全选" : "全选"}</button></div>
           <div className="category-picker">
             {categoriesList.map((category) => {
               const active = selected.includes(category.id);

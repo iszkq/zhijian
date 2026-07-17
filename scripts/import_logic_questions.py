@@ -75,6 +75,59 @@ def analysis_types(blocks: dict[int, str]) -> dict[int, str]:
     return result
 
 
+def styled_stems(path: Path) -> dict[int, list[dict[str, object]]]:
+    if not path.exists():
+        return {}
+    root = ET.fromstring(zipfile.ZipFile(path).read("word/document.xml"))
+    paragraphs = list(root.iter(W + "p"))
+    plain = ["".join(t.text or "" for t in p.iter(W + "t")).strip() for p in paragraphs]
+    title_re = re.compile(r"^\s*(\d{1,2})\s*[.．、]\s*\(")
+    merged_re = re.compile(r"逻辑判断.*?(\d{1,2})\s*[.．、]")
+    titles = []
+    for index, text in enumerate(plain):
+        match = title_re.match(text) or merged_re.search(text)
+        if not match:
+            continue
+        number = int(match.group(1))
+        if titles and titles[-1][1] == number and index - titles[-1][0] <= 2:
+            continue
+        titles.append((index, number))
+    boundaries = [(0, 0, 0)]
+    section = 0
+    previous = 0
+    for index, number in titles:
+        if number <= previous:
+            section += 1
+        boundaries.append((index, section, number))
+        previous = number
+    result = {}
+    for offset, (start, section, number) in enumerate(boundaries):
+        end = boundaries[offset + 1][0] if offset + 1 < len(boundaries) else len(paragraphs)
+        block = []
+        for index in range(start, end):
+            text = plain[index]
+            if not text or "逻辑判断" in text or "四海公考" in text or "练习题" in text or text.isdigit() or title_re.match(text) or merged_re.search(text):
+                continue
+            block.append((text, paragraphs[index]))
+        option_start = next((i for i, (text, _) in enumerate(block) if re.match(r"^\s*A\s*[.．、]", text)), len(block))
+        segments = []
+        for paragraph_index, (_, paragraph) in enumerate(block[:option_start]):
+            if paragraph_index:
+                segments.append({"text": " "})
+            for run in paragraph.iter(W + "r"):
+                text = "".join(t.text or "" for t in run.iter(W + "t"))
+                if not text:
+                    continue
+                props = next(iter(run.findall(W + "rPr")), None)
+                bold = props is not None and props.find(W + "b") is not None
+                underline = props is not None and props.find(W + "u") is not None
+                segments.append({"text": text, **({"bold": True} if bold else {}), **({"underline": True} if underline else {})})
+        slot = 0 if offset == 0 else section * 20 + number - 1
+        if segments:
+            result[slot] = segments
+    return result
+
+
 def practical_explanations(blocks: dict[int, str]) -> dict[int, str]:
     result = {}
     for slot, text in blocks.items():
@@ -93,7 +146,7 @@ def sql_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def convert(source: Path, static_output: Path, migration_output: Path, explanations: dict[int, str], types: dict[int, str]) -> dict:
+def convert(source: Path, static_output: Path, migration_output: Path, explanations: dict[int, str], types: dict[int, str], rich_stems: dict[int, list[dict[str, object]]]) -> dict:
     payload = json.loads(source.read_text(encoding="utf-8"))
     logic = []
     sql = [
@@ -109,7 +162,7 @@ def convert(source: Path, static_output: Path, migration_output: Path, explanati
             "id": question_id, "categoryId": 6, "type": types.get(index - 1, "逻辑判断"), "stem": item["content"],
             "options": options, "answer": answer_label, "explanation": explanations.get(index - 1, ""),
             "source": "逻辑判断600题", "difficulty": "进阶", "status": "published",
-            "details": {"globalNumber": index, "sourceNumber": item.get("sourceNumber"), "pairingMode": "question-block"},
+            "details": {"globalNumber": index, "sourceNumber": item.get("sourceNumber"), "pairingMode": "question-block", "annotatedStemRich": rich_stems.get(index - 1)},
         }
         logic.append(record)
         values = [str(question_id), "6", sql_quote(record["type"]), sql_quote(record["stem"]),
@@ -134,7 +187,8 @@ def main() -> None:
     blocks = analysis_blocks(args.analysis)
     types = analysis_types(blocks)
     explanations = practical_explanations(blocks)
-    print(json.dumps({**convert(args.source, args.static, args.migration, explanations, types), "classified": len(types), "explanations": len(explanations)}, ensure_ascii=False))
+    rich_stems = styled_stems(args.analysis)
+    print(json.dumps({**convert(args.source, args.static, args.migration, explanations, types, rich_stems), "classified": len(types), "explanations": len(explanations), "richStems": len(rich_stems)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
