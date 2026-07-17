@@ -15,9 +15,17 @@ const languageTypeTotals = questions.filter((question) => question.categoryId ==
   return counts;
 }, {});
 const languageTypeCounts = Object.entries(languageTypeTotals).map(([label, value]) => ({ type: [...new Set(value.types)].join(","), label, count: value.count }));
+const logicTypeTotals = questions.filter((question) => question.categoryId === 6).reduce<Record<string, { types: string[]; count: number }>>((counts, question) => {
+  const label = question.type || "逻辑判断";
+  counts[label] ||= { types: [], count: 0 };
+  counts[label].types.push(question.type);
+  counts[label].count += 1;
+  return counts;
+}, {});
+const logicTypeCounts = Object.entries(logicTypeTotals).map(([label, value]) => ({ type: [...new Set(value.types)].join(","), label, count: value.count }));
 
 export const categories: Category[] = [
-  { id: 6, slug: "logic", name: "逻辑判断", shortName: "逻辑", description: "支持、削弱、真假分析、翻译推理和逻辑论证", color: "#8b5cf6", softColor: "#f0eaff", questionCount: 600 },
+  { id: 6, slug: "logic", name: "逻辑判断", shortName: "逻辑", description: "支持、削弱、真假分析、翻译推理和逻辑论证", color: "#8b5cf6", softColor: "#f0eaff", questionCount: 600, typeCounts: logicTypeCounts },
   { id: 1, slug: "politics", name: "政治理论", shortName: "政治", description: "马克思主义、党史与时政热点", color: "#6c5ce7", softColor: "#eeeafd", questionCount: 0 },
   { id: 2, slug: "knowledge", name: "常识判断", shortName: "常识", description: "法律、科技、人文与地理常识", color: "#f59e42", softColor: "#fff3e5", questionCount: 0 },
   { id: 3, slug: "language", name: "言语理解与表达", shortName: "言语", description: "片段阅读、选词填空与语句表达", color: "#21a179", softColor: "#e5f8f1", questionCount: 600, typeCounts: languageTypeCounts },
