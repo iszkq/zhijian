@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import zipfile
+from difflib import SequenceMatcher
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -134,6 +135,7 @@ def practical_explanations(blocks: dict[int, str]) -> dict[int, str]:
         match = re.search(r"【?实战解析】?", text)
         if match:
             value = text[match.start():]
+            value = re.split(r"\s*(?:[①-㊿0-9]+\s*)?花生批注\s*[:：]?", value, maxsplit=1)[0]
         else:
             value = ""
         value = re.sub(r"\s+", " ", value).strip()
@@ -142,11 +144,45 @@ def practical_explanations(blocks: dict[int, str]) -> dict[int, str]:
     return result
 
 
+def note_similarity(note: str, question: dict) -> float:
+    left = re.sub(r"[^0-9A-Za-z\u3400-\u9fff]", "", note)
+    right = re.sub(r"[^0-9A-Za-z\u3400-\u9fff]", "", f"{question.get('content', '')}{question.get('explanation', '')}")
+    if not left or not right:
+        return 0.0
+    score = SequenceMatcher(None, left[:300], right[:1000], autojunk=False).ratio()
+    pairs = {left[i:i + 2] for i in range(max(0, len(left) - 1))}
+    matches = sum(pair in right for pair in pairs)
+    return score + (matches / len(pairs) if pairs else 0)
+
+
+def matched_notes(blocks: dict[int, str], source_questions: list[dict]) -> dict[int, list[dict]]:
+    marker_re = re.compile(r"(?:[①-㊿0-9]{1,3}\s*)?花生批注\s*[:：]?")
+    assigned: dict[int, list[dict]] = {}
+    for slot, text in blocks.items():
+        matches = list(marker_re.finditer(text))
+        for order, match in enumerate(matches):
+            end = matches[order + 1].start() if order + 1 < len(matches) else len(text)
+            content = re.sub(r"\s+", " ", text[match.end():end]).strip(" ：:;")
+            if not content:
+                continue
+            section_start = (slot // 20) * 20
+            candidates = list(range(section_start, min(section_start + 20, len(source_questions))))
+            ranked = sorted(((note_similarity(content, source_questions[index]), index) for index in candidates), reverse=True)
+            sequence_score = next((score for score, index in ranked if index == slot), 0.0)
+            best_score, best_index = ranked[0]
+            if sequence_score >= best_score - 0.10:
+                selected, score, mode = slot, sequence_score, "sequence-and-content"
+            else:
+                selected, score, mode = best_index, best_score, "content-similarity"
+            assigned.setdefault(selected, []).append({"marker": match.group(0).strip(" ：:"), "content": content, "matchScore": round(score, 4), "pairingMode": mode, "order": order})
+    return assigned
+
+
 def sql_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def convert(source: Path, static_output: Path, migration_output: Path, explanations: dict[int, str], types: dict[int, str], rich_stems: dict[int, list[dict[str, object]]]) -> dict:
+def convert(source: Path, static_output: Path, migration_output: Path, explanations: dict[int, str], types: dict[int, str], rich_stems: dict[int, list[dict[str, object]]], notes: dict[int, list[dict]]) -> dict:
     payload = json.loads(source.read_text(encoding="utf-8"))
     logic = []
     sql = [
@@ -162,7 +198,7 @@ def convert(source: Path, static_output: Path, migration_output: Path, explanati
             "id": question_id, "categoryId": 6, "type": types.get(index - 1, "逻辑判断"), "stem": item["content"],
             "options": options, "answer": answer_label, "explanation": explanations.get(index - 1, ""),
             "source": "逻辑判断600题", "difficulty": "进阶", "status": "published",
-            "details": {"globalNumber": index, "sourceNumber": item.get("sourceNumber"), "pairingMode": "question-block", "annotatedStemRich": rich_stems.get(index - 1)},
+            "details": {"globalNumber": index, "sourceNumber": item.get("sourceNumber"), "pairingMode": "question-block", "annotatedStemRich": rich_stems.get(index - 1), "notes": notes.get(index - 1, [])},
         }
         logic.append(record)
         values = [str(question_id), "6", sql_quote(record["type"]), sql_quote(record["stem"]),
@@ -188,7 +224,9 @@ def main() -> None:
     types = analysis_types(blocks)
     explanations = practical_explanations(blocks)
     rich_stems = styled_stems(args.analysis)
-    print(json.dumps({**convert(args.source, args.static, args.migration, explanations, types, rich_stems), "classified": len(types), "explanations": len(explanations), "richStems": len(rich_stems)}, ensure_ascii=False))
+    source_questions = json.loads(args.source.read_text(encoding="utf-8"))["questions"]
+    notes = matched_notes(blocks, source_questions)
+    print(json.dumps({**convert(args.source, args.static, args.migration, explanations, types, rich_stems, notes), "classified": len(types), "explanations": len(explanations), "richStems": len(rich_stems), "matchedNotes": sum(len(value) for value in notes.values())}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
