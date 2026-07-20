@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import zipfile
+from difflib import SequenceMatcher
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def normalize_type(value: str) -> str:
+    value = re.sub(r"[①-㊿0-9⑤⑥⑦⑧⑨⑩]+", "", value)
+    value = re.sub(r"\s+", "", value).replace("·", "")
+    if value.startswith(("一般质疑", "有论据有结论的一般质疑")):
+        return "一般质疑类"
+    if value.startswith(("一般支持", "支持")) or value == "分享类":
+        return "支持类"
+    if value.startswith("分析"):
+        return "分析类"
+    if value.startswith("归因") or "归因" in value:
+        return "归因类"
+    if value.startswith(("前提假设", "必要前提")):
+        return "前提假设类"
+    if value.startswith(("解释", "原因解释")):
+        return "解释说明类"
+    if value.startswith("推出"):
+        return "推出类"
+    return value or "逻辑判断"
+
+
+def analysis_blocks(path: Path) -> dict[int, str]:
+    if not path.exists():
+        return {}
+    root = ET.fromstring(zipfile.ZipFile(path).read("word/document.xml"))
+    paragraphs = ["".join(t.text or "" for t in p.iter(W + "t")).strip() for p in root.iter(W + "p")]
+    title_re = re.compile(r"^\s*(\d{1,2})\s*[.．、]\s*\(")
+    merged_re = re.compile(r"逻辑判断.*?(\d{1,2})\s*[.．、]")
+    titles = []
+    for index, text in enumerate(paragraphs):
+        match = title_re.match(text) or merged_re.search(text)
+        if not match:
+            continue
+        number = int(match.group(1))
+        if titles and titles[-1][1] == number and index - titles[-1][0] <= 2:
+            continue
+        titles.append((index, number))
+    boundaries = [(0, 0, 0)]
+    section = 0
+    previous = 0
+    for index, number in titles:
+        if number <= previous:
+            section += 1
+        boundaries.append((index, section, number))
+        previous = number
+    result = {}
+    for offset, (start, section, number) in enumerate(boundaries):
+        end = boundaries[offset + 1][0] if offset + 1 < len(boundaries) else len(paragraphs)
+        text = " ".join(paragraphs[start:end])
+        slot = 0 if offset == 0 else section * 20 + number - 1
+        result[slot] = text
+    return result
+
+
+def analysis_types(blocks: dict[int, str]) -> dict[int, str]:
+    result = {}
+    for slot, text in blocks.items():
+        match = re.search(r"题型分类\s*[】\]:：]?\s*([^【\n]+)", text)
+        if match:
+            value = normalize_type(re.split(r"[—–-]", match.group(1).strip(), maxsplit=1)[0].strip())
+            if value:
+                result[slot] = value
+    return result
+
+
+def styled_stems(path: Path) -> dict[int, list[dict[str, object]]]:
+    if not path.exists():
+        return {}
+    root = ET.fromstring(zipfile.ZipFile(path).read("word/document.xml"))
+    paragraphs = list(root.iter(W + "p"))
+    plain = ["".join(t.text or "" for t in p.iter(W + "t")).strip() for p in paragraphs]
+    title_re = re.compile(r"^\s*(\d{1,2})\s*[.．、]\s*\(")
+    merged_re = re.compile(r"逻辑判断.*?(\d{1,2})\s*[.．、]")
+    titles = []
+    for index, text in enumerate(plain):
+        match = title_re.match(text) or merged_re.search(text)
+        if not match:
+            continue
+        number = int(match.group(1))
+        if titles and titles[-1][1] == number and index - titles[-1][0] <= 2:
+            continue
+        titles.append((index, number))
+    boundaries = [(0, 0, 0)]
+    section = 0
+    previous = 0
+    for index, number in titles:
+        if number <= previous:
+            section += 1
+        boundaries.append((index, section, number))
+        previous = number
+    result = {}
+    for offset, (start, section, number) in enumerate(boundaries):
+        end = boundaries[offset + 1][0] if offset + 1 < len(boundaries) else len(paragraphs)
+        block = []
+        for index in range(start, end):
+            text = plain[index]
+            if not text or "逻辑判断" in text or "四海公考" in text or "练习题" in text or text.isdigit() or title_re.match(text) or merged_re.search(text):
+                continue
+            block.append((text, paragraphs[index]))
+        option_start = next((i for i, (text, _) in enumerate(block) if re.match(r"^\s*A\s*[.．、]", text)), len(block))
+        segments = []
+        for paragraph_index, (_, paragraph) in enumerate(block[:option_start]):
+            if paragraph_index:
+                segments.append({"text": " "})
+            for run in paragraph.iter(W + "r"):
+                text = "".join(t.text or "" for t in run.iter(W + "t"))
+                if not text:
+                    continue
+                props = next(iter(run.findall(W + "rPr")), None)
+                bold = props is not None and props.find(W + "b") is not None
+                underline = props is not None and props.find(W + "u") is not None
+                segments.append({"text": text, **({"bold": True} if bold else {}), **({"underline": True} if underline else {})})
+        slot = 0 if offset == 0 else section * 20 + number - 1
+        if segments:
+            result[slot] = segments
+    return result
+
+
+def practical_explanations(blocks: dict[int, str]) -> dict[int, str]:
+    result = {}
+    for slot, text in blocks.items():
+        match = re.search(r"【?实战解析】?", text)
+        if match:
+            value = text[match.start():]
+            value = re.split(r"\s*(?:[①-㊿0-9]+\s*)?花生批注\s*[:：]?", value, maxsplit=1)[0]
+        else:
+            value = ""
+        value = re.sub(r"\s+", " ", value).strip()
+        if value and value not in {"【实战解析】", "实战解析"}:
+            result[slot] = value
+    return result
+
+
+def note_similarity(note: str, question: dict) -> float:
+    left = re.sub(r"[^0-9A-Za-z\u3400-\u9fff]", "", note)
+    right = re.sub(r"[^0-9A-Za-z\u3400-\u9fff]", "", f"{question.get('content', '')}{question.get('explanation', '')}")
+    if not left or not right:
+        return 0.0
+    score = SequenceMatcher(None, left[:300], right[:1000], autojunk=False).ratio()
+    pairs = {left[i:i + 2] for i in range(max(0, len(left) - 1))}
+    matches = sum(pair in right for pair in pairs)
+    return score + (matches / len(pairs) if pairs else 0)
+
+
+def matched_notes(blocks: dict[int, str], source_questions: list[dict]) -> dict[int, list[dict]]:
+    marker_re = re.compile(r"(?:[①-㊿0-9]{1,3}\s*)?花生批注\s*[:：]?")
+    assigned: dict[int, list[dict]] = {}
+    for slot, text in blocks.items():
+        matches = list(marker_re.finditer(text))
+        for order, match in enumerate(matches):
+            end = matches[order + 1].start() if order + 1 < len(matches) else len(text)
+            content = re.sub(r"\s+", " ", text[match.end():end]).strip(" ：:;")
+            if not content:
+                continue
+            section_start = (slot // 20) * 20
+            candidates = list(range(section_start, min(section_start + 20, len(source_questions))))
+            ranked = sorted(((note_similarity(content, source_questions[index]), index) for index in candidates), reverse=True)
+            sequence_score = next((score for score, index in ranked if index == slot), 0.0)
+            best_score, best_index = ranked[0]
+            if sequence_score >= best_score - 0.10:
+                selected, score, mode = slot, sequence_score, "sequence-and-content"
+            else:
+                selected, score, mode = best_index, best_score, "content-similarity"
+            assigned.setdefault(selected, []).append({"marker": match.group(0).strip(" ：:"), "content": content, "matchScore": round(score, 4), "pairingMode": mode, "order": order})
+    return assigned
+
+
+def sql_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def convert(source: Path, static_output: Path, migration_output: Path, explanations: dict[int, str], types: dict[int, str], rich_stems: dict[int, list[dict[str, object]]], notes: dict[int, list[dict]]) -> dict:
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    logic = []
+    sql = [
+        "-- Add and refresh the 600 logic-judgement questions.",
+        "INSERT OR IGNORE INTO categories (id, slug, name, short_name, description, color, soft_color, sort_order) VALUES (6, 'logic', '逻辑判断', '逻辑', '支持、削弱、真假分析、翻译推理和逻辑论证', '#8b5cf6', '#f0eaff', 6);",
+        "DELETE FROM questions WHERE category_id = 6;",
+    ]
+    for index, item in enumerate(payload["questions"], 1):
+        question_id = 400000 + index
+        answer_label = "".join(chr(ord("A") + value) for value in item["answer"])
+        options = [{"label": chr(ord("A") + n), "content": text} for n, text in enumerate(item["options"])]
+        record = {
+            "id": question_id, "categoryId": 6, "type": types.get(index - 1, "逻辑判断"), "stem": item["content"],
+            "options": options, "answer": answer_label, "explanation": explanations.get(index - 1, ""),
+            "source": "逻辑判断600题", "difficulty": "进阶", "status": "published",
+            "details": {"globalNumber": index, "sourceNumber": item.get("sourceNumber"), "pairingMode": "question-block", "annotatedStemRich": rich_stems.get(index - 1), "notes": notes.get(index - 1, [])},
+        }
+        logic.append(record)
+        values = [str(question_id), "6", sql_quote(record["type"]), sql_quote(record["stem"]),
+                  sql_quote(json.dumps(options, ensure_ascii=False, separators=(",", ":"))), sql_quote(answer_label),
+                  sql_quote(record["explanation"]), sql_quote(record["source"]), sql_quote(record["difficulty"]),
+                  sql_quote(record["status"]), sql_quote(json.dumps(record["details"], ensure_ascii=False, separators=(",", ":")))]
+        sql.append("INSERT INTO questions (id, category_id, type, stem, options_json, answer, explanation, source, difficulty, status, details_json) VALUES (" + ",".join(values) + ");")
+    existing = json.loads(static_output.read_text(encoding="utf-8")) if static_output.exists() else []
+    existing = [question for question in existing if question.get("categoryId") not in {4, 5, 6}]
+    static_output.write_text(json.dumps(existing + logic, ensure_ascii=False, indent=2), encoding="utf-8")
+    migration_output.write_text("\n".join(sql) + "\n", encoding="utf-8")
+    return {"logicQuestions": len(logic), "totalStaticQuestions": len(existing) + len(logic), "answers": sum(bool(q["answer"]) for q in logic)}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source", type=Path)
+    parser.add_argument("--analysis", type=Path, default=Path(r"C:\Users\Administrator\Desktop\三板块\逻辑判断 600   解析.docx"))
+    parser.add_argument("--static", type=Path, default=Path("src/fragmentQuestions.json"))
+    parser.add_argument("--migration", type=Path, default=Path("migrations/0008_logic_questions.sql"))
+    args = parser.parse_args()
+    blocks = analysis_blocks(args.analysis)
+    types = analysis_types(blocks)
+    explanations = practical_explanations(blocks)
+    rich_stems = styled_stems(args.analysis)
+    source_questions = json.loads(args.source.read_text(encoding="utf-8"))["questions"]
+    notes = matched_notes(blocks, source_questions)
+    print(json.dumps({**convert(args.source, args.static, args.migration, explanations, types, rich_stems, notes), "classified": len(types), "explanations": len(explanations), "richStems": len(rich_stems), "matchedNotes": sum(len(value) for value in notes.values())}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
