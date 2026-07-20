@@ -10,7 +10,7 @@ import { categories, getQuestions, questions } from "./data";
 import { loadAttempts, saveAttempt } from "./storage";
 import { fetchCategories, fetchCloudAttempts, fetchPracticeQuestions, fetchQuestionsByIds, getCurrentUser, login, logout, register, syncAttempt } from "./api";
 import Admin from "./Admin";
-import type { AnswerState, Attempt, AuthUser, Category, PracticeConfig, Question, RichTextSegment, ViewName } from "./types";
+import type { AnswerState, Attempt, AuthUser, Category, Option, PracticeConfig, Question, RichTextSegment, ViewName } from "./types";
 
 const formatTime = (seconds: number) => {
   const safe = Math.max(0, seconds);
@@ -34,6 +34,18 @@ function RichText({ segments, className = "" }: { segments: RichTextSegment[]; c
     const style = blankUnderline ? { "--blank-chars": segment.text.length } as CSSProperties : undefined;
     return <span key={`${index}-${segment.text.slice(0, 8)}`} className={`${segment.bold ? "rich-bold " : ""}${segment.underline ? "rich-underline " : ""}${segment.italic ? "rich-italic " : ""}${segment.highlight ? "rich-highlight " : ""}${blankUnderline ? "rich-blank" : ""}`} style={style}>{blankUnderline ? "\u00a0" : segment.text}</span>;
   })}</span>;
+}
+
+function normalizedOptions(question: Question): Option[] {
+  const clean = (value: string) => value
+    .split(/【参考答案|【题型分类|【实战解析|花生批注/u, 1)[0]
+    .replace(/片段阅读\s*6?\s*0?\s*0?.*$/u, "")
+    .trim();
+  const rich = new Map((question.details?.annotatedOptions || []).map((option) => [option.label, clean(option.rich.map((segment) => segment.text).join(""))]));
+  return ["A", "B", "C", "D"].map((label) => {
+    const stored = clean(question.options.find((option) => option.label === label)?.content || "");
+    return { label, content: stored && !/【|参考答案|实战解析/u.test(stored) ? stored : (rich.get(label) || stored) };
+  });
 }
 
 function highlightAddedParentheticals(original: string, segments: RichTextSegment[]) {
@@ -493,7 +505,7 @@ function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSub
               {item.details?.material && <div className="question-material"><strong>材料</strong><p>{item.details.material}</p></div>}
               {item.stemRich?.length ? <div className="question-stem"><RichText segments={item.stemRich} /></div> : <p className="question-stem">{item.stem}</p>}
               <div className="option-grid">
-                {item.options.map((option) => (
+                {normalizedOptions(item).map((option) => (
                   <button key={option.label} className={answers[item.id]?.selected === option.label ? "option active" : "option"} onClick={() => answer(item.id, option.label)}>
                     <span>{option.label}</span><b>{option.content}</b>{answers[item.id]?.selected === option.label && <Check size={18} />}
                   </button>
@@ -567,7 +579,7 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
               {item.imageUrl && <img className="question-image review-image" src={item.imageUrl} alt="题目材料" />}
               {item.details?.material && <div className="question-material review-material"><strong>材料</strong><p>{item.details.material}</p></div>}
               {annotatedReviewStem ? <div className="review-stem review-stem-annotated"><RichText segments={annotatedReviewStem} /></div> : item.stemRich?.length ? <div className="review-stem"><RichText segments={item.stemRich} /></div> : <p className="review-stem">{item.stem}</p>}
-              <div className="review-options">{item.options.map((option) => {
+              <div className="review-options">{normalizedOptions(item).map((option) => {
                 const isAnswer = option.label === item.answer;
                 const isSelected = option.label === selected;
                 return <div key={option.label} className={`${isAnswer ? "answer" : ""} ${isSelected && !isAnswer ? "chosen-wrong" : ""}`}><span>{option.label}</span><b>{option.content}</b>{isAnswer && <em><Check size={14} />正确答案</em>}{isSelected && !isAnswer && <em><X size={14} />你的答案</em>}</div>;
@@ -636,7 +648,7 @@ function WrongBook({ attempts, onPractice, navigate }: { attempts: Attempt[]; on
         </button>
         {isOpen && <div className="wrong-detail">
           {question.imageUrl && <img className="question-image wrong-detail-image" src={question.imageUrl} alt="题目材料" />}
-          <div className="wrong-detail-options">{question.options.map((option) => <div key={option.label} className={`${option.label === question.answer ? "correct" : ""} ${option.label === selected ? "selected" : ""}`}><span>{option.label}</span><b>{option.content}</b>{option.label === question.answer && <em><Check size={15} />正确答案</em>}{option.label === selected && option.label !== question.answer && <em><X size={15} />你的答案</em>}</div>)}</div>
+          <div className="wrong-detail-options">{normalizedOptions(question).map((option) => <div key={option.label} className={`${option.label === question.answer ? "correct" : ""} ${option.label === selected ? "selected" : ""}`}><span>{option.label}</span><b>{option.content}</b>{option.label === question.answer && <em><Check size={15} />正确答案</em>}{option.label === selected && option.label !== question.answer && <em><X size={15} />你的答案</em>}</div>)}</div>
           <div className="wrong-analysis"><div><BookCheck size={19} /><b>题目解析</b><span>难度：{question.difficulty}</span><span>来源：{question.source}</span></div>{question.details?.typeLabel && <p><b>题型与文段类型：</b>{question.details.typeLabel}</p>}{question.details?.notes?.map((note) => <p key={`${question.id}-${note.marker}`}><b>{note.marker}花生批注：</b>{note.text}</p>)}<p>{question.details?.practical || question.explanation}</p></div>
         </div>}
       </article>;

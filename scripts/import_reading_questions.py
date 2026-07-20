@@ -477,6 +477,8 @@ def merge_analysis(path: Path, bases: list[dict[str, object]]) -> None:
                         content = "".join(str(segment.get("text") or "") for segment in rich if isinstance(segment, dict)).strip()
                         if content and not option_values.get(label):
                             option_values[label] = content
+        for label, value in list(option_values.items()):
+            option_values[label] = re.split(r"【参考答案|【题型分类|【实战解析|花生批注", value, maxsplit=1)[0].strip()
         base["options"] = [{"label": label, "content": option_values[label]} for label in "ABCD" if label in option_values]
         base["optionRich"] = {label: [{"text": option_values[label]}] for label in option_values}
 

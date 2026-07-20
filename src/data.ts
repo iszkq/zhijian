@@ -14,11 +14,15 @@ type ImportedQuestion = Question & {
 export const questions = (importedQuestions as unknown as ImportedQuestion[]).map((question) => {
   const details = question.details;
   const richOptions = details?.annotatedOptionRich;
-  const options = question.options?.some((option) => option.content?.trim())
-    ? question.options
-    : richOptions
-      ? Object.entries(richOptions).map(([label, rich]) => ({ label, content: rich.map((segment) => segment.text).join("").trim() }))
-      : question.options;
+  const stripTrailingAnalysis = (value: string) => value
+    .split(/【参考答案|【题型分类|【实战解析|花生批注/u, 1)[0]
+    .replace(/片段阅读\s*6?\s*0?\s*0?.*$/u, "")
+    .trim();
+  const richByLabel = new Map(Object.entries(richOptions || {}).map(([label, rich]) => [label, stripTrailingAnalysis(rich.map((segment) => segment.text).join(""))]));
+  const options = ["A", "B", "C", "D"].map((label) => {
+    const stored = stripTrailingAnalysis(question.options?.find((option) => option.label === label)?.content || "");
+    return { label, content: stored && !/【|参考答案|实战解析/u.test(stored) ? stored : (richByLabel.get(label) || stored) };
+  });
   return {
     ...question,
     options,

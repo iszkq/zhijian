@@ -61,11 +61,15 @@ function publicQuestion(row: Record<string, unknown>) {
   const details = parseQuestionDetails(row.detailsJson);
   const storedOptions = JSON.parse(String(row.optionsJson));
   const richOptions = details?.annotatedOptionRich as Record<string, Array<{ text?: string }>> | undefined;
-  const options = storedOptions.some((option: { content?: string }) => option.content?.trim())
-    ? storedOptions
-    : richOptions
-      ? Object.entries(richOptions).map(([label, rich]) => ({ label, content: rich.map((segment) => segment.text || "").join("").trim() }))
-      : storedOptions;
+  const stripTrailingAnalysis = (value: string) => value
+    .split(/【参考答案|【题型分类|【实战解析|花生批注/u, 1)[0]
+    .replace(/片段阅读\s*6?\s*0?\s*0?.*$/u, "")
+    .trim();
+  const richByLabel = new Map(Object.entries(richOptions || {}).map(([label, rich]) => [label, stripTrailingAnalysis(rich.map((segment) => segment.text || "").join(""))]));
+  const options = ["A", "B", "C", "D"].map((label) => {
+    const stored = stripTrailingAnalysis(String(storedOptions.find((option: { label?: string }) => option.label === label)?.content || ""));
+    return { label, content: stored && !/【|参考答案|实战解析/u.test(stored) ? stored : (richByLabel.get(label) || stored) };
+  });
   return {
     ...row,
     type: cleanQuestionType(row.type),
