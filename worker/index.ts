@@ -327,13 +327,21 @@ app.get("/api/questions", async (c) => {
   const placeholders = ids.map(() => "?").join(",");
   const typePlaceholders = types.map(() => "?").join(",");
   const typeFilter = types.length ? ` AND q.type IN (${typePlaceholders})` : "";
+  const groupedData = ids.length === 1 && ids[0] === 5;
+  const groupCount = groupedData ? Math.max(1, Math.ceil(count / 5)) : 0;
+  const groupFilter = groupedData ? ` AND CAST((json_extract(q.details_json, '$.globalNumber') - 1) / 5 AS INTEGER) IN (
+    SELECT CAST((json_extract(details_json, '$.globalNumber') - 1) / 5 AS INTEGER)
+    FROM questions WHERE status = 'published' AND category_id = 5
+    GROUP BY CAST((json_extract(details_json, '$.globalNumber') - 1) / 5 AS INTEGER)
+    ORDER BY RANDOM() LIMIT ${groupCount}
+  )` : "";
   const statement = c.env.DB.prepare(`
     SELECT q.id, q.category_id AS categoryId, c.name AS categoryName, q.type, q.stem,
            q.options_json AS optionsJson, q.answer, q.explanation, q.source, q.difficulty,
            q.image_key AS imageKey, q.status, q.details_json AS detailsJson
     FROM questions q JOIN categories c ON c.id = q.category_id
-    WHERE q.status = 'published' AND q.category_id IN (${placeholders})${typeFilter}
-    ORDER BY RANDOM() LIMIT ?
+    WHERE q.status = 'published' AND q.category_id IN (${placeholders})${typeFilter}${groupFilter}
+    ORDER BY ${groupedData ? "CAST((json_extract(q.details_json, '$.globalNumber') - 1) / 5 AS INTEGER), json_extract(q.details_json, '$.globalNumber')" : "RANDOM()"} LIMIT ?
   `).bind(...ids, ...types, count);
   const { results } = await statement.all<Record<string, unknown>>();
   return c.json({ data: results.map(publicQuestion) });

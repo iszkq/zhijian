@@ -28,6 +28,7 @@ export interface RichTextSegment {
 export interface QuestionDetails {
   set: number;
   number: number;
+  globalNumber?: number;
   sourceMatch?: number;
   typeLabel?: string | null;
   missingOptionLabels?: string[];
@@ -35,6 +36,7 @@ export interface QuestionDetails {
   annotatedOptions?: Array<{ label: string; rich: RichTextSegment[] }>;
   practical?: string;
   material?: string;
+  materialGroupId?: string;
   notes?: Array<{ marker: string; text: string }>;
 }
 

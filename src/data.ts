@@ -78,5 +78,12 @@ export const categories: Category[] = [
 export const getQuestions = (categoryIds: number[], count: number, questionType?: string): Question[] => {
   const allowedTypes = questionType?.split(",") || [];
   const pool = questions.filter((item) => categoryIds.includes(item.categoryId) && (!allowedTypes.length || allowedTypes.includes(item.type)));
+  if (categoryIds.length === 1 && categoryIds[0] === 5) {
+    const groups = [...new Map(pool.map((item) => {
+      const group = item.details?.materialGroupId || `data-${Math.floor(((item.details?.globalNumber || item.id) - 1) / 5) + 1}`;
+      return [group, [] as Question[]];
+    })).keys()].sort(() => Math.random() - 0.5);
+    return groups.slice(0, Math.max(1, Math.ceil(count / 5))).flatMap((group) => pool.filter((item) => (item.details?.materialGroupId || `data-${Math.floor(((item.details?.globalNumber || item.id) - 1) / 5) + 1}`) === group)).slice(0, Math.max(count, Math.ceil(count / 5) * 5));
+  }
   return [...pool].sort(() => Math.random() - 0.5).slice(0, Math.min(count, pool.length));
 };

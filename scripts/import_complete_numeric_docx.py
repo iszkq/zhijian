@@ -391,6 +391,7 @@ def import_doc(path: Path, kind: str, category_id: int, id_base: int) -> tuple[l
             "details": {
                 "globalNumber": index + 1,
                 "sourceNumber": expected,
+                "materialGroupId": f"data-{index // 5 + 1}" if kind == "data" else None,
                 "typeLabel": raw_type,
                 "stemRich": stem_rich,
                 "annotatedStemRich": stem_rich,
