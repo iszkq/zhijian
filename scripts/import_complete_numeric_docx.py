@@ -14,6 +14,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
+from docx import Document
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 ANSWER_QTY = "【参考答案】"
@@ -41,6 +42,33 @@ def compact(value: str) -> str:
     value = re.sub(r" *\n *", "\n", value)
     value = re.sub(r"(?<=[\u3400-\u9fff，。；：！？、（）《》“”‘’]) +(?=[\u3400-\u9fff，。；：！？、（）《》“”‘’])", "", value)
     return value.strip()
+
+
+def extract_text_materials(path: Path) -> list[str]:
+    """Extract the readable source block immediately before each answer key.
+
+    Data-analysis Word files place the source text/table transcription before
+    the set's full answer line. Walking backwards keeps the source together and
+    excludes the following explanations, notes, and question choices.
+    """
+    paragraphs = [paragraph.text.strip() for paragraph in Document(path).paragraphs]
+    answer_positions = [i for i, value in enumerate(paragraphs) if "全篇答案" in value]
+    materials: list[str] = []
+    question_re = re.compile(r"^\s*\d{1,3}\s*[.．。]")
+    for answer_at in answer_positions:
+        parts: list[str] = []
+        for value in reversed(paragraphs[max(0, answer_at - 80):answer_at]):
+            if not value:
+                continue
+            if any(marker in value for marker in ("花生批注", "参考答案", "题型分类", "实战解析", "全篇答案")) or question_re.match(value):
+                if parts:
+                    break
+                continue
+            parts.append(compact(value))
+        material = "\n".join(reversed(list(dict.fromkeys(parts)))).strip()
+        if len(material) >= 20 and not material.startswith(("练习题", "资料分析", "B=", "A≈")):
+            materials.append(material)
+    return materials
 
 
 def xml_paragraphs(path: Path) -> list[Paragraph]:
@@ -359,6 +387,7 @@ def import_doc(path: Path, kind: str, category_id: int, id_base: int) -> tuple[l
     records: list[dict] = []
     starts: list[int] = []
     current_material = ""
+    text_materials = extract_text_materials(path) if kind == "data" else []
     for index, answer_at in enumerate(answers):
         expected = index % 10 + 1 if kind == "quantity" else index % 20 + 1
         previous = answers[index - 1] + 1 if index else 0
@@ -366,7 +395,7 @@ def import_doc(path: Path, kind: str, category_id: int, id_base: int) -> tuple[l
         stem, stem_rich, options, option_rich = parse_question(paragraphs, start, answer_at, answer_label)
         if kind == "data" and index % 20 == 0:
             current_material = extract_group_material(paragraphs, start, previous)
-        material = current_material if kind == "data" else ""
+        material = text_materials[index // 5] if kind == "data" and index // 5 < len(text_materials) else current_material if kind == "data" else ""
         answer_match = re.search(re.escape(answer_label) + r"\s*([A-Da-d])", paragraphs[answer_at].text)
         answer = answer_match.group(1).upper() if answer_match else ""
         next_answer = answers[index + 1] if index + 1 < len(answers) else len(paragraphs)

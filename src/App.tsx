@@ -501,7 +501,7 @@ function Practice({ items, config, answers, setAnswers, startedAt, onBack, onSub
                 <div><span className="question-no">{index + 1}<small>/{items.length}</small></span><span className="type-tag">{item.type}</span><span className="point-tag">1分</span></div>
                 <button className={answers[item.id]?.marked ? "mark-button active" : "mark-button"} onClick={() => mark(item.id)}>{answers[item.id]?.marked ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}<span>{answers[item.id]?.marked ? "已标记" : "标记"}</span></button>
               </div>
-              {item.imageUrl && item.categoryId !== 5 && <img className="question-image" src={item.imageUrl} alt="题目材料" />}
+              {item.imageUrl && (item.categoryId !== 5 || !item.details?.material) && <img className="question-image" src={item.imageUrl} alt="题目材料" />}
               {item.details?.material && (index === 0 || (items[index - 1].details?.materialGroupId || Math.floor(((items[index - 1].details?.globalNumber || items[index - 1].id) - 1) / 5)) !== (item.details.materialGroupId || Math.floor(((item.details.globalNumber || item.id) - 1) / 5))) && <div className="question-material"><strong>材料</strong><p>{item.details.material}</p></div>}
               {item.stemRich?.length ? <div className="question-stem"><RichText segments={item.stemRich} /></div> : <p className="question-stem">{item.stem}</p>}
               <div className="option-grid">
@@ -576,7 +576,7 @@ function Report({ attempt, navigate, onRetry }: { attempt: Attempt; navigate: (v
             const annotatedReviewStem = expanded.has(item.id) && item.details?.annotatedStem?.length ? highlightAddedParentheticals(item.stem, item.details.annotatedStem) : null;
             return <article className={`review-card ${correct ? "correct" : "wrong"}`} key={item.id}>
               <div className="review-meta"><div><span className="result-stamp">{correct ? <Check size={18} /> : <X size={18} />}{correct ? "正确" : selected ? "错误" : "未答"}</span><span>{index + 1}/{items.length}</span><span>{item.type}</span><span>{item.categoryName}</span></div><b>{correct ? "+1分" : "0分"}</b></div>
-              {item.imageUrl && item.categoryId !== 5 && <img className="question-image review-image" src={item.imageUrl} alt="题目材料" />}
+              {item.imageUrl && (item.categoryId !== 5 || !item.details?.material) && <img className="question-image review-image" src={item.imageUrl} alt="题目材料" />}
               {item.details?.material && <div className="question-material review-material"><strong>材料</strong><p>{item.details.material}</p></div>}
               {annotatedReviewStem ? <div className="review-stem review-stem-annotated"><RichText segments={annotatedReviewStem} /></div> : item.stemRich?.length ? <div className="review-stem"><RichText segments={item.stemRich} /></div> : <p className="review-stem">{item.stem}</p>}
               <div className="review-options">{normalizedOptions(item).map((option) => {
